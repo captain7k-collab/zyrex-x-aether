@@ -1,0 +1,7 @@
+telethon
+flask
+requests
+qrcode
+gTTS
+yt-dlp
+Pillow
