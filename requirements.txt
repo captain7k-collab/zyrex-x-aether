@@ -5,3 +5,5 @@ qrcode
 gTTS
 yt-dlp
 Pillow
+cryptography
+asyncpg
