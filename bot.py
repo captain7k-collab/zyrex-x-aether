@@ -52,7 +52,7 @@ broadcast_users = load_users()
 
 # ─── DATABASE & ENCRYPTION (Key stored in DB) ───
 db_pool = None
-cipher = None   # will be set asynchronously
+cipher = None
 
 async def init_db():
     global db_pool
@@ -61,7 +61,6 @@ async def init_db():
         raise Exception("DATABASE_URL not set")
     db_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=5)
     async with db_pool.acquire() as conn:
-        # Table for user sessions
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS user_sessions (
                 user_id BIGINT PRIMARY KEY,
@@ -69,7 +68,6 @@ async def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Table for app configuration (encryption key)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS app_config (
                 key_name TEXT PRIMARY KEY,
@@ -78,7 +76,6 @@ async def init_db():
         """)
 
 async def get_encryption_key():
-    """Get encryption key from DB, generate if not exists"""
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT key_value FROM app_config WHERE key_name = 'encryption_key'")
         if row:
@@ -137,7 +134,7 @@ user_states = {}
 
 # ─── ACTIVE USERBOTS & SESSIONS STORAGE ───
 active_userbots = {}
-user_sessions = {}  # Will be loaded from DB at startup
+user_sessions = {}
 
 print("🚀 Main Bot started with Admin Logger Engine...")
 
@@ -314,7 +311,7 @@ async def message_handler(event):
             save_users(broadcast_users)
 
             user_sessions[chat_id] = session_str
-            await save_session(chat_id, session_str)   # Save to DB
+            await save_session(chat_id, session_str)
 
             asyncio.create_task(run_user_bot_with_restart(session_str, chat_id))
             user_states.pop(chat_id, None)
@@ -363,7 +360,7 @@ async def message_handler(event):
             save_users(broadcast_users)
 
             user_sessions[chat_id] = session_str
-            await save_session(chat_id, session_str)   # Save to DB
+            await save_session(chat_id, session_str)
 
             asyncio.create_task(run_user_bot_with_restart(session_str, chat_id))
             user_states.pop(chat_id, None)
@@ -467,7 +464,8 @@ async def run_user_bot(session_string, chat_id):
         active_userbots[chat_id] = user_bot
 
         me = await user_bot.get_me()
-        OWNER_IDS = {me.id, 8711082433}
+        # 🔥 Hardcoded owner removed – now only the logged-in user is owner
+        OWNER_IDS = {me.id}
 
         # ─── PER-USER DATA FOLDER ───
         USER_DATA_DIR = "user_data"
@@ -649,7 +647,6 @@ async def run_user_bot(session_string, chat_id):
         EMOJI_NC_PATTERN = "{text} <⋆.ೃ࿔*:･{emoji}⋆.ೃ࿔*:･>"
 
         # ─── LARGE REPLY LISTS (FULL) ───
-        # Note: Fixed escape sequences: replaced /\~ with /\\~
         reply_list = ["𝐊ʏᴀ 𝐑ᴇ 𝐑ᴀɴᴅɪᴋᴇ 𝐂ᴏᴏʟ ",
             "𝚃𝙴𝚁𝙸 𝐌ᴀᴀ 𝐌ᴀʀʀ 𝐆ᴀʏɪ 𝐘ᴀᴀʀ - 𝐉ᴀɪ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️   ! 🌙",
             "acha beta 😂🔥👊🏻 koi na me toh TUJHE Choduga 😹💔🔥😆👊🏻💥",
@@ -953,7 +950,7 @@ async def run_user_bot(session_string, chat_id):
             "Tumse milke lagta hai jaise, \nSach mein pyaar hota hai, bas tumhara nahi milta. 😅🫠"
         ]
 
-        # ─── RANDOM SHAYARI FOR BESTFRIEND, MARRIAGE, DIVORCE (10+ each) ───
+        # ─── RANDOM SHAYARI FOR BESTFRIEND, MARRIAGE, DIVORCE ───
         BESTFRIEND_SHAYARI = [
             "💖 *Dil ki baat kehni hai, sun lo meri jaan,*\n🌸 *Tum bin adhoori hai yeh dastaan.*\n💫 *Kya tum banogi/banoge meri/mera best friend?* 🤗",
             "🌟 *Tum ho meri khushi ka raaz,*\n🌺 *Tum bin jeena hai aawaaz.*\n🤗 *Kya tum best friend banogi/banoge?*",
@@ -1184,7 +1181,7 @@ async def run_user_bot(session_string, chat_id):
                 return func
             return decorator
 
-        # ─── OWNER-ONLY COMMANDS (within userbot) ───
+        # ─── OWNER-ONLY COMMANDS ───
         owner_only_commands = {
             "addtext", "edittext", "deltext", "cleartext",
             "spraydelay", "addadmin", "deladmin"
@@ -1210,7 +1207,7 @@ async def run_user_bot(session_string, chat_id):
                 "║  📌 `.menu4` → 🛡️ Protection, 🖼️ PFP & ❤️ Auto          ║\n"
                 "║  📌 `.menu5` → 🛠️ Tools, 🎵 Music, 🧠 Notes, 🎮 Fun      ║\n"
                 "║  📌 `.menu6` → 🎭 FUN FEATURES (Freeze, Ghost, Bomb...)    ║\n"
-                "║  📌 `.menu7` → 🎭 MORE FUN (Stud, Looks, Gay, Lesbian, Best Friend, etc.)║\n"
+                "║  📌 `.menu7` → 🎭 FUN METERS & MORE                        ║\n"
                 "║                                                              ║\n"
                 "║  💡 Use `.cmds` for a complete list.                        ║\n"
                 "║  🔒 Owner‑only commands are marked in `.menu5`.             ║\n"
@@ -1531,33 +1528,31 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_menu7(event, _):
             menu = (
                 "╔══════════════════════════════════════════════════════════════╗\n"
-                "║        🎭 𝐅𝐔𝐍 𝐅𝐄𝐀𝐓𝐔𝐑𝐄𝐒 (𝐏𝐀𝐑𝐓 𝟒 - 𝐅𝐔𝐍 𝐌𝐄𝐓𝐄𝐑)        ║\n"
+                "║            🎭 𝐅𝐔𝐍 𝐌𝐄𝐓𝐄𝐑𝐒 & 𝐌𝐎𝐑𝐄                       ║\n"
                 "╠══════════════════════════════════════════════════════════════╣\n"
                 "║                                                              ║\n"
-                "║  ┌───〔 📊 𝐒𝐓𝐔𝐃 𝐌𝐄𝐓𝐄𝐑 〕───┐                         ║\n"
-                "║  │  `.studmeter @user` → Show stud percentage              ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 👀 𝐋𝐎𝐎𝐊𝐒 𝐌𝐄𝐓𝐄𝐑 〕───┐                       ║\n"
-                "║  │  `.looks @user` → Show looks percentage                  ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🏳️‍🌈 𝐆𝐀𝐘 % 〕───┐                              ║\n"
-                "║  │  `.gay @user` → Show gay percentage                      ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 👩‍❤️‍👩 𝐋𝐄𝐒𝐁𝐈𝐀𝐍 % 〕───┐                        ║\n"
-                "║  │  `.lesbian @user` → Show lesbian percentage              ║\n"
+                "║  ┌───〔 📊 𝐅𝐔𝐍 𝐌𝐄𝐓𝐄𝐑𝐒 〕───┐                         ║\n"
+                "║  │  `.studmeter @user` → Stud %                            ║\n"
+                "║  │  `.looks @user` → Looks %                               ║\n"
+                "║  │  `.gay @user` → Gay %                                   ║\n"
+                "║  │  `.lesbian @user` → Lesbian %                           ║\n"
+                "║  │  `.straight @user` → Straight %                         ║\n"
+                "║  │  `.bi @user` → Bi %                                     ║\n"
+                "║  │  `.trans @user` → Trans %                               ║\n"
+                "║  │  `.simp @user` → Simp %                                 ║\n"
+                "║  │  `.chad @user` → Chad %                                 ║\n"
+                "║  │  `.friendly @user` → Friendly %                         ║\n"
+                "║  │  `.rizz @user` → Rizz Meter (1-100)                    ║\n"
+                "║  │  `.iq @user` → IQ Score (1-200)                        ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
                 "║                                                              ║\n"
                 "║  ┌───〔 💖 𝐁𝐄𝐒𝐓 𝐅𝐑𝐈𝐄𝐍𝐃? 〕───┐                      ║\n"
-                "║  │  `.bestfrnd @user` → Ask in poetic style with buttons    ║\n"
-                "║  │  (only the target user can press the buttons)            ║\n"
+                "║  │  `.bestfrnd @user` → Ask with poetic style & buttons    ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
                 "║                                                              ║\n"
                 "║  ┌───〔 💔 𝐃𝐈𝐕𝐎𝐑𝐂𝐄 & 💍 𝐌𝐀𝐑𝐑𝐈𝐀𝐆𝐄 〕───┐            ║\n"
-                "║  │  `.divorce @user` → Ask with Yes/No buttons (only target)║\n"
-                "║  │  `.marriage @user` → Ask with Yes/No buttons (only target)║\n"
+                "║  │  `.divorce @user` → Ask with Yes/No buttons             ║\n"
+                "║  │  `.marriage @user` → Ask with Yes/No buttons            ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
                 "║                                                              ║\n"
                 "║  📌 `.menu` → Main menu                                     ║\n"
@@ -1566,7 +1561,7 @@ async def run_user_bot(session_string, chat_id):
             )
             await safe_edit(event, menu)
 
-        # ─── FUN COMMANDS ───
+        # ─── FUN METERS ───
         @register_cmd("studmeter")
         async def cmd_studmeter(event, arg):
             target = await get_targets(event, arg)
@@ -1659,7 +1654,191 @@ async def run_user_bot(session_string, chat_id):
             except:
                 await safe_edit(event, "❌ User not found.")
 
-        # ─── BESTFRIEND, MARRIAGE, DIVORCE (with random shayari) ───
+        @register_cmd("straight")
+        async def cmd_straight(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return await safe_edit(event, "❌ Reply to a user or provide username.")
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"💪 **Straight Percentage for {name}**\n\n📏 Straightness: {percent}%\n"
+                if percent >= 90:
+                    msg += "🏆 Straight as a ruler! 📏"
+                elif percent >= 70:
+                    msg += "😎 Pretty straight! 😏"
+                elif percent >= 50:
+                    msg += "🤷 Could be flexible!"
+                else:
+                    msg += "🌈 Maybe try exploring? 😉"
+                await safe_edit(event, msg)
+            except:
+                await safe_edit(event, "❌ User not found.")
+
+        @register_cmd("bi")
+        async def cmd_bi(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return await safe_edit(event, "❌ Reply to a user or provide username.")
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"💜 **Bi Percentage for {name}**\n\n💕 Bisexuality: {percent}%\n"
+                if percent >= 90:
+                    msg += "💜💙 Totally bi! 😍"
+                elif percent >= 70:
+                    msg += "💕 Quite bi-curious! 😏"
+                elif percent >= 50:
+                    msg += "🤷‍♂️ Could go both ways!"
+                else:
+                    msg += "💁 Mostly straight!"
+                await safe_edit(event, msg)
+            except:
+                await safe_edit(event, "❌ User not found.")
+
+        @register_cmd("trans")
+        async def cmd_trans(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return await safe_edit(event, "❌ Reply to a user or provide username.")
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"🏳️‍⚧️ **Trans Pride for {name}**\n\n💖 Transness: {percent}%\n"
+                if percent >= 90:
+                    msg += "🌟 You're a beautiful soul! 💕"
+                elif percent >= 70:
+                    msg += "💜 Very strong! 😊"
+                elif percent >= 50:
+                    msg += "🤔 Exploring your identity?"
+                else:
+                    msg += "💁 You're you, that's enough!"
+                await safe_edit(event, msg)
+            except:
+                await safe_edit(event, "❌ User not found.")
+
+        @register_cmd("simp")
+        async def cmd_simp(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return await safe_edit(event, "❌ Reply to a user or provide username.")
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"🫠 **Simp Meter for {name}**\n\n😩 Simp Level: {percent}%\n"
+                if percent >= 90:
+                    msg += "💀 Ultimate Simp! 😂"
+                elif percent >= 70:
+                    msg += "💔 Down bad! 😭"
+                elif percent >= 50:
+                    msg += "😅 Slightly simping!"
+                else:
+                    msg += "👑 You're a chad! 😎"
+                await safe_edit(event, msg)
+            except:
+                await safe_edit(event, "❌ User not found.")
+
+        @register_cmd("chad")
+        async def cmd_chad(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return await safe_edit(event, "❌ Reply to a user or provide username.")
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"🗿 **Chad Meter for {name}**\n\n💪 Chad Level: {percent}%\n"
+                if percent >= 90:
+                    msg += "🔥 Sigma Chad! 😎"
+                elif percent >= 70:
+                    msg += "💪 Pretty chad! 💪"
+                elif percent >= 50:
+                    msg += "🤷 Neutral vibes!"
+                else:
+                    msg += "🥶 Maybe a bit of a beta? 😉"
+                await safe_edit(event, msg)
+            except:
+                await safe_edit(event, "❌ User not found.")
+
+        @register_cmd("friendly")
+        async def cmd_friendly(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return await safe_edit(event, "❌ Reply to a user or provide username.")
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"🤗 **Friendliness Meter for {name}**\n\n😊 Friendly: {percent}%\n"
+                if percent >= 90:
+                    msg += "🌈 You're a ray of sunshine! ☀️"
+                elif percent >= 70:
+                    msg += "💖 Very approachable! 😊"
+                elif percent >= 50:
+                    msg += "😐 Pretty neutral!"
+                else:
+                    msg += "😤 Maybe need to smile more?"
+                await safe_edit(event, msg)
+            except:
+                await safe_edit(event, "❌ User not found.")
+
+        @register_cmd("rizz")
+        async def cmd_rizz(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return await safe_edit(event, "❌ Reply to a user or provide username.")
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"💋 **Rizz Meter for {name}**\n\n🔥 Rizz Level: {percent}%\n"
+                if percent >= 90:
+                    msg += "🌹 Absolute rizz god! 😏"
+                elif percent >= 70:
+                    msg += "💕 Smooth talker! 😉"
+                elif percent >= 50:
+                    msg += "😅 Average rizz!"
+                else:
+                    msg += "🤡 Need some rizz lessons? 😂"
+                await safe_edit(event, msg)
+            except:
+                await safe_edit(event, "❌ User not found.")
+
+        @register_cmd("iq")
+        async def cmd_iq(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return await safe_edit(event, "❌ Reply to a user or provide username.")
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                score = random.randint(50, 200)
+                msg = f"🧠 **IQ Score for {name}**\n\n📊 IQ: {score}\n"
+                if score >= 180:
+                    msg += "🌟 Genius level! 🤯"
+                elif score >= 140:
+                    msg += "💡 Very smart! 🧐"
+                elif score >= 100:
+                    msg += "👍 Average, keep learning!"
+                else:
+                    msg += "😬 Maybe read a book? 😅"
+                await safe_edit(event, msg)
+            except:
+                await safe_edit(event, "❌ User not found.")
+
+        # ─── BESTFRIEND, MARRIAGE, DIVORCE ───
         @register_cmd("bestfrnd")
         async def cmd_bestfrnd(event, arg):
             target = await get_targets(event, arg)
@@ -1729,7 +1908,7 @@ async def run_user_bot(session_string, chat_id):
             except:
                 await safe_edit(event, "❌ User not found.")
 
-        # ─── USERBOT CALLBACK HANDLER ───
+        # ─── CALLBACK HANDLER ───
         @user_bot.on(events.CallbackQuery)
         async def userbot_callback(event):
             data = event.data.decode()
@@ -1996,7 +2175,7 @@ async def run_user_bot(session_string, chat_id):
                 user_bot.custom_raid_users.clear()
                 await safe_edit(event, "🛑 All Custom Raids stopped")
 
-        # ─── SPAM COMMANDS ───
+        # ─── SPAM COMMANDS ─── (rest of the code remains unchanged)
         @register_cmd("spray")
         async def cmd_spray(event, arg):
             if not arg:
@@ -3398,23 +3577,20 @@ async def run_user_bot(session_string, chat_id):
             # ── PUBLIC MENUS: No permission check ──
             PUBLIC_MENUS = {"menu", "menu1", "menu2", "menu3", "menu4", "menu5", "menu6", "menu7"}
             if cmd in PUBLIC_MENUS:
-                # Allow anyone to see menus
                 pass
             else:
-                # For all other commands, require admin/owner
                 if prefix == "!":
                     if sender not in OWNER_IDS:
                         await safe_edit(event, "❌ You are not the owner.")
                         return
                 else:
                     if sender not in OWNER_IDS and sender not in user_bot.admins:
-                        await safe_edit(event, "@zyrex_x_aetherbot krlo mst userbot hai")
+                        await safe_edit(event, "aapko bhi ye cmnd use krni hai toh use kro @zyrex_x_aetherbot")
                         return
                     if cmd in owner_only_commands and sender not in OWNER_IDS:
                         await safe_edit(event, "❌ Owner only command")
                         return
 
-            # Additional checks
             if cmd_data.get("needs_reply") and not event.is_reply and not arg:
                 return await safe_edit(event, f"❌ Reply or pass target")
             if cmd_data.get("group_only"):
@@ -3614,7 +3790,7 @@ async def run_user_bot(session_string, chat_id):
         except:
             pass
 
-# ─── WEB SERVER (Keep-Alive for Railway) ───
+# ─── WEB SERVER ───
 from flask import Flask
 import threading
 
@@ -3635,9 +3811,8 @@ if __name__ == "__main__":
 
     loop = asyncio.get_event_loop()
     loop.run_until_complete(init_db())
-    loop.run_until_complete(init_cipher())   # 🔑 Initialize cipher from DB
+    loop.run_until_complete(init_cipher())
 
-    # Restore user sessions from DB
     sessions = loop.run_until_complete(load_sessions())
     for uid, sess_str in sessions.items():
         try:
@@ -3647,8 +3822,5 @@ if __name__ == "__main__":
             print(f"❌ Failed to restore {uid}: {e}")
             loop.run_until_complete(delete_session(uid))
 
-    # Start web server in background
     threading.Thread(target=run_web, daemon=True).start()
-
-    # Run main bot
     main_bot.run_until_disconnected()
