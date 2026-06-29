@@ -50,20 +50,9 @@ def save_users(users):
 
 broadcast_users = load_users()
 
-# ─── DATABASE & ENCRYPTION FOR SESSIONS ───
-ENCRYPT_KEY = os.environ.get("SESSION_ENCRYPT_KEY")
-if not ENCRYPT_KEY:
-    ENCRYPT_KEY = Fernet.generate_key().decode()
-    print(f"⚠️ Set SESSION_ENCRYPT_KEY in environment to: {ENCRYPT_KEY}")
-cipher = Fernet(ENCRYPT_KEY.encode())
-
-def encrypt_session(sess: str) -> str:
-    return cipher.encrypt(sess.encode()).decode()
-
-def decrypt_session(encrypted: str) -> str:
-    return cipher.decrypt(encrypted.encode()).decode()
-
+# ─── DATABASE & ENCRYPTION (Key stored in DB) ───
 db_pool = None
+cipher = None   # will be set asynchronously
 
 async def init_db():
     global db_pool
@@ -72,6 +61,7 @@ async def init_db():
         raise Exception("DATABASE_URL not set")
     db_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=5)
     async with db_pool.acquire() as conn:
+        # Table for user sessions
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS user_sessions (
                 user_id BIGINT PRIMARY KEY,
@@ -79,6 +69,42 @@ async def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Table for app configuration (encryption key)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS app_config (
+                key_name TEXT PRIMARY KEY,
+                key_value TEXT NOT NULL
+            )
+        """)
+
+async def get_encryption_key():
+    """Get encryption key from DB, generate if not exists"""
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT key_value FROM app_config WHERE key_name = 'encryption_key'")
+        if row:
+            return row['key_value']
+        else:
+            new_key = Fernet.generate_key().decode()
+            await conn.execute(
+                "INSERT INTO app_config (key_name, key_value) VALUES ($1, $2)",
+                "encryption_key", new_key
+            )
+            return new_key
+
+async def init_cipher():
+    global cipher
+    key = await get_encryption_key()
+    cipher = Fernet(key.encode())
+
+def encrypt_session(sess: str) -> str:
+    if cipher is None:
+        raise RuntimeError("Cipher not initialized")
+    return cipher.encrypt(sess.encode()).decode()
+
+def decrypt_session(encrypted: str) -> str:
+    if cipher is None:
+        raise RuntimeError("Cipher not initialized")
+    return cipher.decrypt(encrypted.encode()).decode()
 
 async def save_session(user_id: int, session_str: str):
     encrypted = encrypt_session(session_str)
@@ -134,14 +160,12 @@ def get_join_buttons():
 # ─── GRACEFUL SHUTDOWN ───
 async def shutdown_handler(sig, frame):
     print("🛑 Shutting down gracefully...")
-    # Broadcast to all users
     for uid in broadcast_users:
         try:
             await main_bot.send_message(uid, "⚠️ **Bot is going offline for maintenance/restart.**\nWe'll be back soon!")
             await asyncio.sleep(0.5)
         except:
             pass
-    # Disconnect userbots
     for uid, client in active_userbots.items():
         try:
             await client.disconnect()
@@ -290,7 +314,7 @@ async def message_handler(event):
             save_users(broadcast_users)
 
             user_sessions[chat_id] = session_str
-            await save_session(chat_id, session_str)
+            await save_session(chat_id, session_str)   # Save to DB
 
             asyncio.create_task(run_user_bot_with_restart(session_str, chat_id))
             user_states.pop(chat_id, None)
@@ -339,7 +363,7 @@ async def message_handler(event):
             save_users(broadcast_users)
 
             user_sessions[chat_id] = session_str
-            await save_session(chat_id, session_str)
+            await save_session(chat_id, session_str)   # Save to DB
 
             asyncio.create_task(run_user_bot_with_restart(session_str, chat_id))
             user_states.pop(chat_id, None)
@@ -625,6 +649,7 @@ async def run_user_bot(session_string, chat_id):
         EMOJI_NC_PATTERN = "{text} <⋆.ೃ࿔*:･{emoji}⋆.ೃ࿔*:･>"
 
         # ─── LARGE REPLY LISTS (FULL) ───
+        # Note: Fixed escape sequences: replaced /\~ with /\\~
         reply_list = ["𝐊ʏᴀ 𝐑ᴇ 𝐑ᴀɴᴅɪᴋᴇ 𝐂ᴏᴏʟ ",
             "𝚃𝙴𝚁𝙸 𝐌ᴀᴀ 𝐌ᴀʀʀ 𝐆ᴀʏɪ 𝐘ᴀᴀʀ - 𝐉ᴀɪ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️   ! 🌙",
             "acha beta 😂🔥👊🏻 koi na me toh TUJHE Choduga 😹💔🔥😆👊🏻💥",
@@ -3589,7 +3614,7 @@ async def run_user_bot(session_string, chat_id):
         except:
             pass
 
-# ─── WEB SERVER FOR RENDER (KEEP-ALIVE) ───
+# ─── WEB SERVER (Keep-Alive for Railway) ───
 from flask import Flask
 import threading
 
@@ -3604,14 +3629,15 @@ def run_web():
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
 
-# ─── START MAIN BOT ───
+# ─── MAIN ───
 if __name__ == "__main__":
     print("🚀 Main bot starting with Web Server...")
 
-    # Initialize DB and restore sessions
     loop = asyncio.get_event_loop()
     loop.run_until_complete(init_db())
+    loop.run_until_complete(init_cipher())   # 🔑 Initialize cipher from DB
 
+    # Restore user sessions from DB
     sessions = loop.run_until_complete(load_sessions())
     for uid, sess_str in sessions.items():
         try:
