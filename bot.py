@@ -7,6 +7,8 @@ import logging
 import traceback
 import re
 import glob
+import signal
+import sys
 from typing import Dict, Set, Optional
 from io import BytesIO
 import requests
@@ -16,8 +18,9 @@ import yt_dlp
 from telethon import TelegramClient, events, functions, types
 from telethon.errors import FloodWaitError, RPCError, SessionPasswordNeededError, MessageNotModifiedError, UnauthorizedError
 from telethon.sessions import StringSession
+from cryptography.fernet import Fernet
+import asyncpg
 
-# ─── CONFIGURATION ───
 # ─── CONFIGURATION ───
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
@@ -47,13 +50,68 @@ def save_users(users):
 
 broadcast_users = load_users()
 
+# ─── DATABASE & ENCRYPTION FOR SESSIONS ───
+ENCRYPT_KEY = os.environ.get("SESSION_ENCRYPT_KEY")
+if not ENCRYPT_KEY:
+    ENCRYPT_KEY = Fernet.generate_key().decode()
+    print(f"⚠️ Set SESSION_ENCRYPT_KEY in environment to: {ENCRYPT_KEY}")
+cipher = Fernet(ENCRYPT_KEY.encode())
+
+def encrypt_session(sess: str) -> str:
+    return cipher.encrypt(sess.encode()).decode()
+
+def decrypt_session(encrypted: str) -> str:
+    return cipher.decrypt(encrypted.encode()).decode()
+
+db_pool = None
+
+async def init_db():
+    global db_pool
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        raise Exception("DATABASE_URL not set")
+    db_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=5)
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                user_id BIGINT PRIMARY KEY,
+                session_encrypted TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+async def save_session(user_id: int, session_str: str):
+    encrypted = encrypt_session(session_str)
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO user_sessions (user_id, session_encrypted) VALUES ($1, $2) "
+            "ON CONFLICT (user_id) DO UPDATE SET session_encrypted = $2, updated_at = CURRENT_TIMESTAMP",
+            user_id, encrypted
+        )
+
+async def load_sessions() -> dict:
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id, session_encrypted FROM user_sessions")
+    sessions = {}
+    for row in rows:
+        try:
+            sess = decrypt_session(row['session_encrypted'])
+            sessions[row['user_id']] = sess
+        except:
+            continue
+    return sessions
+
+async def delete_session(user_id: int):
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM user_sessions WHERE user_id = $1", user_id)
+
 # ─── MAIN BOT ───
 main_bot = TelegramClient("main_bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 user_states = {}
 
 # ─── ACTIVE USERBOTS & SESSIONS STORAGE ───
 active_userbots = {}
-user_sessions = {}
+user_sessions = {}  # Will be loaded from DB at startup
 
 print("🚀 Main Bot started with Admin Logger Engine...")
 
@@ -72,6 +130,28 @@ def get_join_buttons():
         buttons.append([types.KeyboardButtonUrl(text=f"🔗 Join {ch['name']}", url=ch["invite"])])
     buttons.append([types.KeyboardButtonCallback(text="✅ I have joined all", data=b"verify_channels")])
     return buttons
+
+# ─── GRACEFUL SHUTDOWN ───
+async def shutdown_handler(sig, frame):
+    print("🛑 Shutting down gracefully...")
+    # Broadcast to all users
+    for uid in broadcast_users:
+        try:
+            await main_bot.send_message(uid, "⚠️ **Bot is going offline for maintenance/restart.**\nWe'll be back soon!")
+            await asyncio.sleep(0.5)
+        except:
+            pass
+    # Disconnect userbots
+    for uid, client in active_userbots.items():
+        try:
+            await client.disconnect()
+        except:
+            pass
+    await main_bot.disconnect()
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, lambda s, f: asyncio.create_task(shutdown_handler(s, f)))
+signal.signal(signal.SIGINT, lambda s, f: asyncio.create_task(shutdown_handler(s, f)))
 
 # ─── MAIN BOT HANDLERS ───
 @main_bot.on(events.NewMessage(pattern="/start"))
@@ -210,6 +290,7 @@ async def message_handler(event):
             save_users(broadcast_users)
 
             user_sessions[chat_id] = session_str
+            await save_session(chat_id, session_str)
 
             asyncio.create_task(run_user_bot_with_restart(session_str, chat_id))
             user_states.pop(chat_id, None)
@@ -258,6 +339,7 @@ async def message_handler(event):
             save_users(broadcast_users)
 
             user_sessions[chat_id] = session_str
+            await save_session(chat_id, session_str)
 
             asyncio.create_task(run_user_bot_with_restart(session_str, chat_id))
             user_states.pop(chat_id, None)
@@ -298,6 +380,7 @@ async def logout_handler(event):
         await user_bot.disconnect()
         del active_userbots[user_id]
         user_sessions.pop(user_id, None)
+        await delete_session(user_id)
         user_states.pop(user_id, None)
 
         await event.reply(
@@ -316,6 +399,7 @@ async def logout_handler(event):
         await event.reply(f"❌ Logout error: `{str(e)}`")
         active_userbots.pop(user_id, None)
         user_sessions.pop(user_id, None)
+        await delete_session(user_id)
 
 # ─────────────────────────────────────────────────────────
 # ─── SUPERVISED USERBOT LAUNCHER (Auto-Restart) ───
@@ -353,6 +437,7 @@ async def run_user_bot(session_string, chat_id):
         except (UnauthorizedError, ValueError, RPCError) as e:
             await main_bot.send_message(chat_id, f"❌ **Session error:** {str(e)[:100]}\nPlease login again using `/login`.")
             user_sessions.pop(chat_id, None)
+            await delete_session(chat_id)
             raise Exception("SESSION_INVALID")
 
         active_userbots[chat_id] = user_bot
@@ -568,7 +653,7 @@ async def run_user_bot(session_string, chat_id):
             "chl rndyce chud ke dikha 😂💥🤣🔥",
             "𝐊ɪ 𝐌ᴀᴀ 𝐌ᴀʀʀ 𝐆ᴀʏɪ naacho 💃🏻💃🏻🕺🏻🎶😂😆💞🔥 !",
             "tera baap bass  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  hai 😂🎀",
-            " T 𝒦𝐼 𝑀𝒜𝒜 𝐵𝐻𝐸𝒩 𝒦♡ 𝑅𝒜𝒩𝒟𝐼 𝐵𝒜𝒩𝒜 𝒦𝒜  𝒞𝐻♡𝒟𝒰𝒰😹🥀",
+            " T 𝒦𝐼 𝑀𝒜𝒜 𝐵𝐻𝐸𝒩 𝐾♡ 𝑅𝒜𝒩𝒟𝐼 𝐵𝒜𝒩𝒜 𝒦𝒜  𝒞𝐻♡𝒟𝒰𝒰😹🥀",
             "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝙁𝙐𝘾𝙆 𝙃𝙄𝙎 𝙈𝙊𝙈 𝙋𝙍𝙊𝙋𝙀𝙍𝙇𝙔",
             "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝘼𝙎𝙆 𝙃𝙄𝙈 𝙏𝙊 𝘾𝙊𝙑𝙀𝙍 𝙃𝙄𝙎 𝙈𝙊𝙈'𝙎 𝘼𝙎𝙎",
             "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝙁𝙄𝙓 𝙈𝙔 𝘼‌𝙋𝙋𝙊𝙄𝙉𝙏𝙈𝙀𝙉𝙏 𝙒𝙄𝙏𝙃 𝙃𝙄𝙎 𝙎𝙄𝙎",
@@ -843,6 +928,46 @@ async def run_user_bot(session_string, chat_id):
             "Tumse milke lagta hai jaise, \nSach mein pyaar hota hai, bas tumhara nahi milta. 😅🫠"
         ]
 
+        # ─── RANDOM SHAYARI FOR BESTFRIEND, MARRIAGE, DIVORCE (10+ each) ───
+        BESTFRIEND_SHAYARI = [
+            "💖 *Dil ki baat kehni hai, sun lo meri jaan,*\n🌸 *Tum bin adhoori hai yeh dastaan.*\n💫 *Kya tum banogi/banoge meri/mera best friend?* 🤗",
+            "🌟 *Tum ho meri khushi ka raaz,*\n🌺 *Tum bin jeena hai aawaaz.*\n🤗 *Kya tum best friend banogi/banoge?*",
+            "🎈 *Zindagi mein tum aaye toh rang hai,*\n🌹 *Har pal tumse hi sang hai.*\n💕 *Best friend bano meri jaan?*",
+            "✨ *Tum ho meri kahani ka aakhri hissa,*\n📖 *Tum bin adhoora hai yeh kissa.*\n🤝 *Kya tum meri best friend banogi/banoge?*",
+            "🌸 *Phoolon ki tarah tum ho khilte,*\n🌼 *Tum bin dil hai kaise milte?*\n💖 *Best friend ka rishta nibhaoge?*",
+            "💫 *Tum ho meri life ka sundar sapna,*\n🌙 *Tum bin sab hai apna-apna.*\n🧸 *Kya tum best friend banogi/banoge?*",
+            "🌺 *Dosti ki raah mein tumse mila,*\n🌷 *Meri duniya tumse hi saja.*\n💕 *Best friend banoge meri jaan?*",
+            "💝 *Tum ho meri khushiyon ki wajah,*\n🎉 *Tum bin har din hai saza.*\n🤗 *Best friend kya tum banogi/banoge?*",
+            "🌟 *Tum ho meri roshni ka silsila,*\n🌙 *Tum bin sab hai bewajah.*\n💖 *Best friend bano na?*",
+            "🎀 *Tum se hai meri zindagi aasaan,*\n🌸 *Tum bin hai mushkil har armaan.*\n🤝 *Best friend banogi/banoge?*"
+        ]
+
+        MARRIAGE_SHAYARI = [
+            "💍 *Chand sitare sab hai gawah,*\n🌹 *Tum bin jeena hai saza.*\n💕 *Kya tum mujhse shaadi karogi/karoge?*",
+            "💒 *Meri har dua mein tum ho shamil,*\n🌺 *Tum bin har khushi hai mushkil.*\n💞 *Shaadi karoge?*",
+            "🌸 *Pyaar ki raah mein tumse mila,*\n🌹 *Meri jaan ban gaye ho tum.*\n💍 *Shaadi ka vaada karo?*",
+            "💖 *Tum ho meri zindagi ka maqsad,*\n🌟 *Tum bin hai sab kuch bekaar.*\n🤵‍♀️🤵‍♂️ *Shaadi karogi/karoge?*",
+            "🎉 *Har lamha tumhare sang bitana hai,*\n🌙 *Tum bin jeena nahi, marna hai.*\n💏 *Shaadi ka irada hai kya?*",
+            "💕 *Tumse hai pyaar, yeh sach hai,*\n🌹 *Tum bin zindagi kuch nahi.*\n💍 *Shaadi karogi/karoge?*",
+            "🌹 *Tum ho meri subah ki pehli kiran,*\n🌙 *Tum bin meri raat hai viran.*\n💒 *Shaadi karte ho?*",
+            "💗 *Dil ki dhadkan tum hi ho,*\n🌟 *Tum bin sab kuch hai khamosh.*\n💍 *Shaadi ka waqt aa gaya?*",
+            "💖 *Pyaar ki gehraai mein tum ho,*\n🌊 *Tum bin meri manzil hai kho.*\n💏 *Shaadi karogi/karoge?*",
+            "💞 *Tumse hai mera har khwab,*\n🌙 *Tum bin meri zindagi hai azaab.*\n💍 *Shaadi ka irada hai?*"
+        ]
+
+        DIVORCE_SHAYARI = [
+            "💔 *Rishton ki dor hai kamzor,*\n🌪️ *Ab nahi sahega yeh dard-e-dil.*\n❓ *Kya tum talaq chahti ho/chahte ho?*",
+            "😢 *Pyaar tha, par ab hai doori,*\n💔 *Nahi rahi ab koi majboori.*\n📜 *Talaq de do?*",
+            "💔 *Toot gaye sapne saare,*\n🌧️ *Ab nahi rahe hum tumhaare.*\n❓ *Kya talaq chahiye?*",
+            "💔 *Ishq mein thi humko khushi,*\n😣 *Ab toh bas hai tanhai.*\n📄 *Talaq mangte ho?*",
+            "💔 *Vaade tod kar tumne,*\n😤 *Humse hai ab na koi rishta.*\n🗑️ *Talaq do?*",
+            "💔 *Zindagi mein ab nahi ho tum,*\n🌪️ *Mann mein bas gayi hai udaasi.*\n❌ *Talaq ki baat karoge?*",
+            "💔 *Pyaar ki kami hai, saath nahi,*\n😭 *Ab aur nahi yeh dard sahti.*\n📜 *Talaq de do?*",
+            "💔 *Apne the, par ab begane,*\n😤 *Kyun baandhein yeh rishte begaane.*\n❓ *Talaq le lo?*",
+            "💔 *Mann mein ab kuch nahi bas gaye,*\n🍂 *Rishton ke patte jhad gaye.*\n🗑️ *Talaq do?*",
+            "💔 *Tum bin hai jeena mushkil,*\n😣 *Par tum ho toh aur mushkil.*\n📄 *Talaq mangte ho?*"
+        ]
+
         # ─── LOAD/SAVE FUNCTIONS ───
         def load_admins():
             try:
@@ -1034,7 +1159,7 @@ async def run_user_bot(session_string, chat_id):
                 return func
             return decorator
 
-        # ─── OWNER-ONLY COMMANDS ───
+        # ─── OWNER-ONLY COMMANDS (within userbot) ───
         owner_only_commands = {
             "addtext", "edittext", "deltext", "cleartext",
             "spraydelay", "addadmin", "deladmin"
@@ -1509,6 +1634,7 @@ async def run_user_bot(session_string, chat_id):
             except:
                 await safe_edit(event, "❌ User not found.")
 
+        # ─── BESTFRIEND, MARRIAGE, DIVORCE (with random shayari) ───
         @register_cmd("bestfrnd")
         async def cmd_bestfrnd(event, arg):
             target = await get_targets(event, arg)
@@ -1516,34 +1642,19 @@ async def run_user_bot(session_string, chat_id):
                 return await safe_edit(event, "❌ Reply to a user or provide username.")
             uid = next(iter(target))
             try:
-                user = await user_bot.get_entity(uid)
-                name = user.first_name or str(uid)
-                shayari = f"❤️ *Dil ki baat kehni hai, sun lo meri jaan,*\n🌸 *Tum bin adhoori hai yeh dastaan.*\n💫 *Kya tum banogi/banoge meri best friend?* 🤗"
+                requester = await user_bot.get_me()
+                requester_name = requester.first_name or "Someone"
+                target_user = await user_bot.get_entity(uid)
+                target_name = target_user.first_name or "Unknown"
+
+                shayari = random.choice(BESTFRIEND_SHAYARI)
+                final_msg = f"{shayari}\n\n**From:** {requester_name}\n**To:** {target_name}"
                 buttons = [
                     [types.KeyboardButtonCallback("💖 Haan, zaroor!", f"bestfrnd_yes_{uid}_{event.sender_id}")],
                     [types.KeyboardButtonCallback("💔 Nahi, sorry!", f"bestfrnd_no_{uid}_{event.sender_id}")]
                 ]
                 await event.delete()
-                await user_bot.send_message(event.chat_id, f"🌸 {shayari}\n\n👤 **{name}**", buttons=buttons)
-            except:
-                await safe_edit(event, "❌ User not found.")
-
-        @register_cmd("divorce")
-        async def cmd_divorce(event, arg):
-            target = await get_targets(event, arg)
-            if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
-            uid = next(iter(target))
-            try:
-                user = await user_bot.get_entity(uid)
-                name = user.first_name or str(uid)
-                shayari = f"💔 *Rishton ki dor hai kamzor,*\n🌪️ *Ab nahi sahega yeh dard-e-dil.*\n❓ *Kya tum talaq chahti ho/chahte ho?*"
-                buttons = [
-                    [types.KeyboardButtonCallback("💔 Yes", f"divorce_yes_{uid}_{event.sender_id}")],
-                    [types.KeyboardButtonCallback("💖 No, let's stay", f"divorce_no_{uid}_{event.sender_id}")]
-                ]
-                await event.delete()
-                await user_bot.send_message(event.chat_id, f"💔 {shayari}\n\n👤 **{name}**", buttons=buttons)
+                await user_bot.send_message(event.chat_id, final_msg, buttons=buttons)
             except:
                 await safe_edit(event, "❌ User not found.")
 
@@ -1554,15 +1665,42 @@ async def run_user_bot(session_string, chat_id):
                 return await safe_edit(event, "❌ Reply to a user or provide username.")
             uid = next(iter(target))
             try:
-                user = await user_bot.get_entity(uid)
-                name = user.first_name or str(uid)
-                shayari = f"💍 *Chand sitare sab hai gawah,*\n🌹 *Tum bin jeena hai saza.*\n💕 *Kya tum mujhse shaadi karogi/karoge?*"
+                requester = await user_bot.get_me()
+                requester_name = requester.first_name or "Someone"
+                target_user = await user_bot.get_entity(uid)
+                target_name = target_user.first_name or "Unknown"
+
+                shayari = random.choice(MARRIAGE_SHAYARI)
+                final_msg = f"{shayari}\n\n**From:** {requester_name}\n**To:** {target_name}"
                 buttons = [
                     [types.KeyboardButtonCallback("💍 Yes", f"marriage_yes_{uid}_{event.sender_id}")],
                     [types.KeyboardButtonCallback("💔 No", f"marriage_no_{uid}_{event.sender_id}")]
                 ]
                 await event.delete()
-                await user_bot.send_message(event.chat_id, f"💍 {shayari}\n\n👤 **{name}**", buttons=buttons)
+                await user_bot.send_message(event.chat_id, final_msg, buttons=buttons)
+            except:
+                await safe_edit(event, "❌ User not found.")
+
+        @register_cmd("divorce")
+        async def cmd_divorce(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return await safe_edit(event, "❌ Reply to a user or provide username.")
+            uid = next(iter(target))
+            try:
+                requester = await user_bot.get_me()
+                requester_name = requester.first_name or "Someone"
+                target_user = await user_bot.get_entity(uid)
+                target_name = target_user.first_name or "Unknown"
+
+                shayari = random.choice(DIVORCE_SHAYARI)
+                final_msg = f"{shayari}\n\n**From:** {requester_name}\n**To:** {target_name}"
+                buttons = [
+                    [types.KeyboardButtonCallback("💔 Yes", f"divorce_yes_{uid}_{event.sender_id}")],
+                    [types.KeyboardButtonCallback("💖 No, let's stay", f"divorce_no_{uid}_{event.sender_id}")]
+                ]
+                await event.delete()
+                await user_bot.send_message(event.chat_id, final_msg, buttons=buttons)
             except:
                 await safe_edit(event, "❌ User not found.")
 
@@ -2049,7 +2187,8 @@ async def run_user_bot(session_string, chat_id):
                         await safe_send(chat, text)
                         sent += 1
                         if sent % 30 == 0:
-                            await asyncio.sleep(3)                        await asyncio.sleep(user_bot.SPRAY_DELAY)
+                            await asyncio.sleep(3)
+                        await asyncio.sleep(user_bot.SPRAY_DELAY)
                 except asyncio.CancelledError:
                     pass
                 finally:
@@ -3231,18 +3370,26 @@ async def run_user_bot(session_string, chat_id):
             if not sender:
                 return
 
-            if prefix == "!":
-                if sender not in OWNER_IDS:
-                    await safe_edit(event, "❌ You are not the owner.")
-                    return
+            # ── PUBLIC MENUS: No permission check ──
+            PUBLIC_MENUS = {"menu", "menu1", "menu2", "menu3", "menu4", "menu5", "menu6", "menu7"}
+            if cmd in PUBLIC_MENUS:
+                # Allow anyone to see menus
+                pass
             else:
-                if sender not in OWNER_IDS and sender not in user_bot.admins:
-                    await safe_edit(event, "@ _x_aetherbot use krlo mst userbot hai")
-                    return
-                if cmd in owner_only_commands and sender not in OWNER_IDS:
-                    await safe_edit(event, "❌ Owner only command")
-                    return
+                # For all other commands, require admin/owner
+                if prefix == "!":
+                    if sender not in OWNER_IDS:
+                        await safe_edit(event, "❌ You are not the owner.")
+                        return
+                else:
+                    if sender not in OWNER_IDS and sender not in user_bot.admins:
+                        await safe_edit(event, "@zyrex_x_aetherbot krlo mst userbot hai")
+                        return
+                    if cmd in owner_only_commands and sender not in OWNER_IDS:
+                        await safe_edit(event, "❌ Owner only command")
+                        return
 
+            # Additional checks
             if cmd_data.get("needs_reply") and not event.is_reply and not arg:
                 return await safe_edit(event, f"❌ Reply or pass target")
             if cmd_data.get("group_only"):
@@ -3457,10 +3604,25 @@ def run_web():
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
 
-# Web server ko background thread mein chalao (taaki bot ruke nahi)
-threading.Thread(target=run_web, daemon=True).start()
-
-# ─── MAIN BOT STARTER ───
+# ─── START MAIN BOT ───
 if __name__ == "__main__":
     print("🚀 Main bot starting with Web Server...")
+
+    # Initialize DB and restore sessions
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(init_db())
+
+    sessions = loop.run_until_complete(load_sessions())
+    for uid, sess_str in sessions.items():
+        try:
+            asyncio.create_task(run_user_bot_with_restart(sess_str, uid))
+            print(f"✅ Restored session for user {uid}")
+        except Exception as e:
+            print(f"❌ Failed to restore {uid}: {e}")
+            loop.run_until_complete(delete_session(uid))
+
+    # Start web server in background
+    threading.Thread(target=run_web, daemon=True).start()
+
+    # Run main bot
     main_bot.run_until_disconnected()
