@@ -1453,76 +1453,64 @@ async def run_user_bot(session_string, chat_id):
 
         @register_cmd("menu6")
         async def cmd_menu6(event, _):
-            menu = (
-                "╔══════════════════════════════════════════════════════════════╗\n"
-                "║              🎭 𝐅𝐔𝐍 𝐅𝐄𝐀𝐓𝐔𝐑𝐄𝐒 (𝐅𝐔𝐋𝐋)                ║\n"
-                "╠══════════════════════════════════════════════════════════════╣\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 ❄️ 𝐅𝐑𝐄𝐄𝐙𝐄 𝐒𝐘𝐒𝐓𝐄𝐌 〕───┐                    ║\n"
-                "║  │  `.freeze @user` → Freeze user's messages                ║\n"
-                "║  │  `.unfreeze @user` → Unfreeze user                       ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 👻 𝐆𝐇𝐎𝐒𝐓 𝐌𝐎𝐃𝐄 〕───┐                         ║\n"
-                "║  │  `.ghost on` → Enable ghost mode (invisible)             ║\n"
-                "║  │  `.ghost off` → Disable ghost mode                       ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 💣 𝐁𝐎𝐌𝐁 𝐒𝐘𝐒𝐓𝐄𝐌 〕───┐                       ║\n"
-                "║  │  `.bomb @user <count>` → Bomb user with messages         ║\n"
-                "║  │  `.stbomb @user` → Stop bombing user                     ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🧠 𝐌𝐈𝐍𝐃𝐅𝐔𝐂𝐊 𝐌𝐎𝐃𝐄 〕───┐                    ║\n"
-                "║  │  `.mindfuck on` → Enable mindfuck mode                   ║\n"
-                "║  │  `.mindfuck off` → Disable mindfuck                     ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🔇 𝐒𝐈𝐋𝐄𝐍𝐓 𝐊𝐈𝐋𝐋 〕───┐                       ║\n"
-                "║  │  `.silentkill @user` → Silently remove user's msgs       ║\n"
-                "║  │  `.ssilentkill @user` → Stop silent kill                 ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🌌 𝐕𝐎𝐈𝐃 𝐌𝐎𝐃𝐄 〕───┐                          ║\n"
-                "║  │  `.void @user` → Send user to void (hide all msgs)       ║\n"
-                "║  │  `.svoid @user` → Stop void mode                         ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🎯 𝐂𝐋𝐎𝐍𝐄 𝐀𝐓𝐓𝐀𝐂𝐊 〕───┐                    ║\n"
-                "║  │  `.clone @user <count>` → Clone user's messages          ║\n"
-                "║  │  `.sclone @user` → Stop clone attack                     ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 💀 𝐃𝐄𝐀𝐓𝐇𝐍𝐎𝐓𝐄 〕───┐                         ║\n"
-                "║  │  `.deathnote @user <msg>` → Send death note              ║\n"
-                "║  │  `.sdeathnote @user` → Stop death note spam              ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🌪️ 𝐂𝐇𝐀𝐎𝐒 𝐌𝐎𝐃𝐄 〕───┐                       ║\n"
-                "║  │  `.chaos on` → Enable chaos mode                         ║\n"
-                "║  │  `.chaos off` → Disable chaos mode                       ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🖥️ 𝐇𝐀𝐂𝐊 𝐌𝐎𝐃𝐄 〕───┐                         ║\n"
-                "║  │  `.hack @user` → Start hack simulation                   ║\n"
-                "║  │  `.shack @user` → Stop hack simulation                   ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🦠 𝐕𝐈𝐑𝐔𝐒 𝐌𝐎𝐃𝐄 〕───┐                        ║\n"
-                "║  │  `.virus on` → Enable virus mode                         ║\n"
-                "║  │  `.virus off` → Disable virus mode                       ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🌑 𝐁𝐋𝐀𝐂𝐊𝐎𝐔𝐓 𝐌𝐎𝐃𝐄 〕───┐                   ║\n"
-                "║  │  `.blackout @user` → Blackout user's messages            ║\n"
-                "║  │  `.sblackout @user` → Stop blackout                      ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  📌 `.menu` → Main menu                                     ║\n"
-                "║                                                              ║\n"
-                "╚══════════════════════════════════════════════════════════════╝"
-            )
-            await safe_edit(event, menu)
+           menu = (
+        "╔══════════════════════════════════════════════════════════════╗\n"
+        "║              🎭 FUN FEATURES (FULL)                         ║\n"
+        "╠══════════════════════════════════════════════════════════════╣\n"
+        "║  ┌───〔 FREEZE SYSTEM 〕───┐\n"
+        "║  │  .freeze @user → Freeze user's messages                ║\n"
+        "║  │  .unfreeze @user → Unfreeze user                       ║\n"
+        "║  └───────────────────────────────┘\n"
+        "║  ┌───〔 GHOST MODE 〕───┐\n"
+        "║  │  .ghost on → Enable ghost mode (invisible)             ║\n"
+        "║  │  .ghost off → Disable ghost mode                       ║\n"
+        "║  └───────────────────────────────┘\n"
+        "║  ┌───〔 BOMB SYSTEM 〕───┐\n"
+        "║  │  .bomb @user <count> → Bomb user with messages         ║\n"
+        "║  │  .stbomb @user → Stop bombing user                     ║\n"
+        "║  └───────────────────────────────┘\n"
+        "║  ┌───〔 MINDFUCK MODE 〕───┐\n"
+        "║  │  .mindfuck on → Enable mindfuck mode                   ║\n"
+        "║  │  .mindfuck off → Disable mindfuck                     ║\n"
+        "║  └───────────────────────────────┘\n"
+        "║  ┌───〔 SILENT KILL 〕───┐\n"
+        "║  │  .silentkill @user → Silently remove user's msgs       ║\n"
+        "║  │  .ssilentkill @user → Stop silent kill                 ║\n"
+        "║  └───────────────────────────────┘\n"
+        "║  ┌───〔 VOID MODE 〕───┐\n"
+        "║  │  .void @user → Send user to void (hide all msgs)       ║\n"
+        "║  │  .svoid @user → Stop void mode                         ║\n"
+        "║  └───────────────────────────────┘\n"
+        "║  ┌───〔 CLONE ATTACK 〕───┐\n"
+        "║  │  .clone @user <count> → Clone user's messages          ║\n"
+        "║  │  .sclone @user → Stop clone attack                     ║\n"
+        "║  └───────────────────────────────┘\n"
+        "║  ┌───〔 DEATHNOTE 〕───┐\n"
+        "║  │  .deathnote @user <msg> → Send death note              ║\n"
+        "║  │  .sdeathnote @user → Stop death note spam              ║\n"
+        "║  └───────────────────────────────┘\n"
+        "║  ┌───〔 CHAOS MODE 〕───┐\n"
+        "║  │  .chaos on → Enable chaos mode                         ║\n"
+        "║  │  .chaos off → Disable chaos mode                       ║\n"
+        "║  └───────────────────────────────┘\n"
+        "║  ┌───〔 HACK MODE 〕───┐\n"
+        "║  │  .hack @user → Start hack simulation                   ║\n"
+        "║  │  .shack @user → Stop hack simulation                   ║\n"
+        "║  └───────────────────────────────┘\n"
+        "║  ┌───〔 VIRUS MODE 〕───┐\n"
+        "║  │  .virus on → Enable virus mode                         ║\n"
+        "║  │  .virus off → Disable virus mode                       ║\n"
+        "║  └───────────────────────────────┘\n"
+        "║  ┌───〔 BLACKOUT MODE 〕───┐\n"
+        "║  │  .blackout @user → Blackout user's messages            ║\n"
+        "║  │  .sblackout @user → Stop blackout                      ║\n"
+        "║  └───────────────────────────────┘\n"
+        "║                                                              ║\n"
+        "║  📌 .menu → Main menu                                     ║\n"
+        "║                                                              ║\n"
+        "╚══════════════════════════════════════════════════════════════╝"
+    )
+    await safe_edit(event, menu)
 
         @register_cmd("menu7")
         async def cmd_menu7(event, _):
@@ -3574,22 +3562,18 @@ async def run_user_bot(session_string, chat_id):
             if not sender:
                 return
 
-            # ── PUBLIC MENUS: No permission check ──
-            PUBLIC_MENUS = {"menu", "menu1", "menu2", "menu3", "menu4", "menu5", "menu6", "menu7"}
-            if cmd in PUBLIC_MENUS:
-                pass
-            else:
-                if prefix == "!":
-                    if sender not in OWNER_IDS:
-                        await safe_edit(event, "❌ You are not the owner.")
-                        return
-                else:
-                    if sender not in OWNER_IDS and sender not in user_bot.admins:
-                        await safe_edit(event, "aapko bhi ye cmnd use krni hai toh use kro @zyrex_x_aetherbot")
-                        return
-                    if cmd in owner_only_commands and sender not in OWNER_IDS:
-                        await safe_edit(event, "❌ Owner only command")
-                        return
+            # ── ALL COMMANDS require owner or admin ──
+if prefix == "!":
+    if sender not in OWNER_IDS:
+        await safe_edit(event, "❌ You are not the owner.")
+        return
+else:
+    if sender not in OWNER_IDS and sender not in user_bot.admins:
+        await safe_edit(event, "@ _x_aetherbot krlo mst userbot hai")
+        return
+    if cmd in owner_only_commands and sender not in OWNER_IDS:
+        await safe_edit(event, "❌ Owner only command")
+        return
 
             if cmd_data.get("needs_reply") and not event.is_reply and not arg:
                 return await safe_edit(event, f"❌ Reply or pass target")
