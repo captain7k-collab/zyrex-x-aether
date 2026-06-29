@@ -3350,7 +3350,7 @@ async def run_user_bot(session_string, chat_id):
                     return
             else:
                 if sender not in OWNER_IDS and sender not in user_bot.admins:
-                    await safe_edit(event, "@ _x_aetherbot use krlo mst userbot hai")
+                    await safe_edit(event, "@zyrex_x_aetherbot use krlo mst userbot hai")
                     return
                 if cmd in owner_only_commands and sender not in OWNER_IDS:
                     await safe_edit(event, "❌ Owner only command")
