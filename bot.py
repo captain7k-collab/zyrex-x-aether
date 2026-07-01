@@ -2129,8 +2129,8 @@ async def run_user_bot(session_string, chat_id):
             {"q": "Main hoon jo kabhi nahi sota, kabhi nahi thakta. Main kya hoon?", "a": "Aankh (Eye)"},
             {"q": "Main hoon jo har insaan ki madad karta hai par koi use nahi dekhta. Main kya hoon?", "a": "Hawa (Air)"},
             {"q": "Main hoon jo duniya mein sabse chhota hai, par sab se bada kaam karta hoon. Main kya hoon?", "a": "Beej (Seed)"},
-            {"q": "Main hoon jo kabhi nahi marta, kabhi nahi hota. Main kya hoon?", "a": "Atma (Soul)"}
-            {"q": "The person who makes it doesn't need it. The person who buys it doesn't use it. The person who uses it doesn't know they're using it. What is it?", "a": "coffin"}
+            {"q": "Main hoon jo kabhi nahi marta, kabhi nahi hota. Main kya hoon?", "a": "Atma (Soul)"},
+            {"q": "The person who makes it doesn't need it. The person who buys it doesn't use it. The person who uses it doesn't know they're using it. What is it?", "a": "coffin"},
         ]
             
                     
@@ -2146,13 +2146,13 @@ async def run_user_bot(session_string, chat_id):
             "Padhai karo beta future bright hoga. Maine padhi — future gaya andhera mein. 😂",
             "Wo bolti hai 'I need space' — main bola ठीक है, NASA se contact karo! 😂",
             "Mera wifi itna slow hai ke circle of life bhi nahi chalta 🐢",
-            "Main sochta hoon kal se gym jaunga... kal kab aata hai? 🤔"
-            "Mummy ka 2 minute aur Maggi ka 2 minute kabhi same nahi hote"
-            "Aaj kal log 'seen' karke itna attitude dikhate hain, jaise message nahi loan approve kar rahe ho"
-            "Meri life itni private hai ki mujhe khud next update ka pata nahi hota 🤡 "
-            "Mere jokes pe sirf do log haste hain... main aur meri overconfidence 🤣"
-            "Log bolte hain Be yourself... phir judge bhi wahi log karte hain"
-            "Life ne itne twists diye hain ki Google Maps bhi rerouting kar de"
+            "Main sochta hoon kal se gym jaunga... kal kab aata hai? 🤔",
+            "Mummy ka 2 minute aur Maggi ka 2 minute kabhi same nahi hote",
+            "Aaj kal log 'seen' karke itna attitude dikhate hain, jaise message nahi loan approve kar rahe ho",
+            "Meri life itni private hai ki mujhe khud next update ka pata nahi hota 🤡 ",
+            "Mere jokes pe sirf do log haste hain... main aur meri overconfidence 🤣",
+            "Log bolte hain Be yourself... phir judge bhi wahi log karte hain",
+            "Life ne itne twists diye hain ki Google Maps bhi rerouting kar de",
         ]
 
         fact_list = [
