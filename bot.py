@@ -25,7 +25,6 @@ import asyncpg
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-# Main bot owners – for notifications and /broadcast only – you can add multiple IDs separated by commas
 MY_OWNER_IDS = {int(x) for x in os.environ.get("OWNER_IDS", "8909378644").split(",") if x.strip()}
 
 # ─── CHANNEL VERIFICATION ───
@@ -122,7 +121,6 @@ async def load_sessions() -> dict:
             sess = decrypt_session(row['session_encrypted'])
             sessions[row['user_id']] = sess
         except Exception:
-            # Corrupt session: delete it
             await delete_session(row['user_id'])
             continue
     return sessions
@@ -135,13 +133,11 @@ async def delete_session(user_id: int):
 main_bot = TelegramClient("main_bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 user_states = {}
 
-# ─── ACTIVE USERBOTS & SESSIONS STORAGE ───
 active_userbots = {}
 user_sessions = {}
 
 print("🚀 Main Bot started with Admin Logger Engine...")
 
-# ─── CHANNEL VERIFICATION HELPERS ───
 async def is_user_in_channel(user_id, channel_data):
     try:
         channel = await main_bot.get_entity(channel_data["id"])
@@ -157,7 +153,6 @@ def get_join_buttons():
     buttons.append([types.KeyboardButtonCallback(text="✅ I have joined all", data=b"verify_channels")])
     return buttons
 
-# ─── GRACEFUL SHUTDOWN ───
 async def shutdown_handler(sig, frame):
     print("🛑 Shutting down gracefully...")
     for uid in broadcast_users:
@@ -177,7 +172,6 @@ async def shutdown_handler(sig, frame):
 signal.signal(signal.SIGTERM, lambda s, f: asyncio.create_task(shutdown_handler(s, f)))
 signal.signal(signal.SIGINT, lambda s, f: asyncio.create_task(shutdown_handler(s, f)))
 
-# ─── FLOOD-SAFE REPLY WRAPPER FOR MAIN BOT ───
 async def safe_reply(event, text, buttons=None, **kwargs):
     try:
         return await event.reply(text, buttons=buttons, **kwargs)
@@ -424,7 +418,7 @@ async def message_handler(event):
             await safe_reply(event, f"❌ Error: `{str(e)}` \nPlease restart with `/login`.")
             user_states.pop(chat_id, None)
 
-# ─── BROADCAST COMMAND (Only main owners) ───
+# ─── BROADCAST COMMAND ───
 @main_bot.on(events.NewMessage(pattern="/broadcast"))
 async def broadcast_cmd(event):
     if event.sender_id not in MY_OWNER_IDS:
@@ -481,9 +475,33 @@ async def logout_handler(event):
         user_sessions.pop(user_id, None)
         await delete_session(user_id)
 
-# ─────────────────────────────────────────────────────────
+# ─── HIDDEN PURNJANAM COMMAND (RESTART) ───
+@main_bot.on(events.NewMessage(pattern="/purnjanam"))
+async def purnjanam_handler(event):
+    if event.sender_id not in MY_OWNER_IDS:
+        return
+    
+    await safe_reply(event, "🌀 **पुनर्जन्म**...\n⏳ Userbot restart ho raha hai...")
+    
+    count = 0
+    for uid, session_str in list(user_sessions.items()):
+        try:
+            if uid in active_userbots:
+                try:
+                    await active_userbots[uid].disconnect()
+                except:
+                    pass
+                del active_userbots[uid]
+            
+            asyncio.create_task(run_user_bot_with_restart(session_str, uid))
+            count += 1
+            await asyncio.sleep(1)
+        except Exception as e:
+            print(f"Purnjanam error for {uid}: {e}")
+    
+    await safe_reply(event, f"✅ **पुनर्जन्म पूर्ण!**\n🔄 {count} userbots restart kiye gaye.")
+
 # ─── SUPERVISED USERBOT LAUNCHER ──────────────────────
-# ─────────────────────────────────────────────────────────
 async def run_user_bot_with_restart(session_string, chat_id):
     while True:
         try:
@@ -499,7 +517,6 @@ async def run_user_bot_with_restart(session_string, chat_id):
             except:
                 pass
             await asyncio.sleep(wait)
-            # after waiting, continue loop to restart
         except Exception as e:
             error_msg = str(e)
             if "SESSION_INVALID" in error_msg:
@@ -514,15 +531,12 @@ async def run_user_bot_with_restart(session_string, chat_id):
                 pass
             await asyncio.sleep(5)
 
-# ─────────────────────────────────────────────────────────
 # ─── FULL USERBOT ENGINE ──────────────────────────────
-# ─────────────────────────────────────────────────────────
 async def run_user_bot(session_string, chat_id):
     user_bot = None
     try:
         user_bot = TelegramClient(StringSession(session_string), API_ID, API_HASH, auto_reconnect=True)
 
-        # ─── SESSION VALIDATION ───
         try:
             await user_bot.start()
         except (UnauthorizedError, ValueError, RPCError) as e:
@@ -534,7 +548,6 @@ async def run_user_bot(session_string, chat_id):
         active_userbots[chat_id] = user_bot
 
         me = await user_bot.get_me()
-        # 🔥 Absolutely NO hardcoded ID – only the logged‑in user is owner
         OWNER_IDS = {me.id}
 
         # ─── PER-USER DATA FOLDER ───
@@ -592,6 +605,43 @@ async def run_user_bot(session_string, chat_id):
         user_bot.rizz_raid = {}
         user_bot.reply_cooldowns = {}
 
+        # ─── FUN RAIDS STATE (Menu8) ───
+        user_bot.pickup_users = set()
+        user_bot.romance_users = set()
+        user_bot.trollraid_users = set()
+        user_bot.ragebait_users = set()
+        user_bot.roastraid_users = set()
+        
+        user_bot.pickup_raid = {}
+        user_bot.romance_raid = {}
+        user_bot.troll_raid = {}
+        user_bot.ragebait_raid = {}
+        user_bot.roast_raid = {}
+
+        # ─── NON-ABUSIVE RAIDS STATE (Menu9) ───
+        user_bot.attackraid_users = set()
+        user_bot.warraid_users = set()
+        user_bot.savageraid_users = set()
+        user_bot.ultraraid_users = set()
+        
+        user_bot.attack_raid = {}
+        user_bot.war_raid = {}
+        user_bot.savage_raid = {}
+        user_bot.ultra_raid = {}
+
+        # ─── NEW MENU9 RAIDS (Shame, Diss, Devil, Karma, Doom) ───
+        user_bot.shame_users = set()
+        user_bot.diss_users = set()
+        user_bot.devil_users = set()
+        user_bot.karma_users = set()
+        user_bot.doom_users = set()
+        
+        user_bot.shame_raid = {}
+        user_bot.diss_raid = {}
+        user_bot.devil_raid = {}
+        user_bot.karma_raid = {}
+        user_bot.doom_raid = {}
+
         # ─── NAME CHANGER (NC) STATE ───
         user_bot.NC_STATE = {
             "active": False,
@@ -599,43 +649,6 @@ async def run_user_bot(session_string, chat_id):
             "lang": None,
             "text": None,
             "chat_id": None,
-        }
-
-        # ─── FUN FEATURES STATE ───
-        user_bot.fun_features = {
-            "freeze_users": set(),
-            "ghost_mode": False,
-            "bomb_targets": {},
-            "mindfuck_active": False,
-            "silent_kill_targets": set(),
-            "void_targets": set(),
-            "clone_targets": {},
-            "deathnote_targets": {},
-            "chaos_active": False,
-            "hack_phrases": [],
-            "hack_targets": set(),
-            "virus_active": False,
-            "blackout_users": set(),
-            "toxic_targets": {},
-            "callbomb_active": False,
-            "wipe_active": False,
-            "fakeadmin_users": set(),
-            "spamjoin_active": False,
-            "rename_targets": {},
-            "blockall_targets": set(),
-            "voicespam_active": False,
-            "gifspam_active": False,
-            "filespam_active": False,
-            "tagabuse_active": False,
-            "loopdelete_active": False,
-            "doubletap_targets": set(),
-            "tripletap_targets": set(),
-            "storm_active": False,
-            "phone_targets": {},
-            "location_targets": {},
-            "ip_targets": {},
-            "crash_targets": {},
-            "terror_active": False,
         }
 
         # ─── NC PATTERNS ───
@@ -650,7 +663,7 @@ async def run_user_bot(session_string, chat_id):
             "{text} गुलामी कर˖ ࣪ ꉂ🗯˙🫐⃟.꩜‹—",
             "{text} चुदाई केंद्र⊹ ࣪ ﹏𓊝﹏𓂁﹏⊹ ࣪ ˖",
             "{text} नांगा नाच कर˖ ࣪ ꉂ🗯˙🫐⃟.꩜‹—",
-            "{text} पापा बोल 🌷⃟‌𝐊ɪᴛᴛᴜ  को⊹ ࣪ ﹏𓊝﹏𓂁﹏⊹ ࣪ ˖",
+            "{text} पापा बोल Mere को⊹ ࣪ ﹏𓊝﹏𓂁﹏⊹ ࣪ ˖",
             "{text} तेरी मां नंगी करू˖ ࣪ ꉂ🗯˙🫐⃟.꩜‹—",
             "{text} छक्के⊹ ࣪ ﹏𓊝﹏𓂁﹏⊹ ࣪ ˖",
             "{text} भोसड़ी के˖ ࣪ ꉂ🗯˙🫐⃟.꩜‹—",
@@ -716,7 +729,9 @@ async def run_user_bot(session_string, chat_id):
         EMOJI_NC_EMOJIS = ["🐧","🦭","🦈","🫍","🐬","🐋","🐳","🐟","🐠","🐡","🦐","🦞","🦀","🦑","🐙","🪼","🦪","🪸","🫧","🦂"]
         EMOJI_NC_PATTERN = "{text} <⋆.ೃ࿔*:･{emoji}⋆.ೃ࿔*:･>"
 
-        # ─── LARGE REPLY LISTS ───
+        # ─── TEXT LISTS ──────────────────────────────────────────────────────────
+
+        # Original reply lists
         reply_list = [
             "𝐊ʏᴀ 𝐑ᴇ 𝐑ᴀɴᴅɪᴋᴇ 𝐂ᴏᴏʟ ",
             "𝚃𝙴𝚁𝙸 𝐌ᴀᴀ 𝐌ᴀʀʀ 𝐆ᴀʏɪ 𝐘ᴀᴀʀ - 𝐉ᴀɪ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️   ! 🌙",
@@ -779,7 +794,7 @@ async def run_user_bot(session_string, chat_id):
             "𝙆𝙄𝙏𝙉𝙄 𝙂𝙇𝙄𝙔𝘼 𝙋𝘿𝙒𝙀𝙂𝘼 𝘼𝙋𝙉𝙄 𝙈𝘼 𝙆𝙊",
             "𝗧𝗘𝗥𝗜 𝗜𝗧𝗘𝗠 𝗞𝗜 𝗚𝗔𝗔𝗡𝗗 𝗠𝗘 𝗟𝗨𝗡𝗗 𝗗𝗔𝗔𝗟𝗞𝗘,𝗧𝗘𝗥𝗘 𝗝𝗔𝗜𝗦𝗔 𝗘𝗞 𝗢𝗥 𝗡𝗜𝗞𝗔𝗔𝗟 𝗗𝗨𝗡𝗚𝗔 𝗠𝗔‌𝗔‌𝗗𝗔𝗥𝗖𝗛Ø𝗗🤘🏻🙌🏻☠️",
             "2 𝙍𝙐𝙋𝘼𝙔 𝙆𝙄 𝙋𝙀𝙋𝙎𝙄 𝙏𝙀𝙍𝙄 𝙈𝙐𝙈𝙈𝙔 𝙎𝘼𝘽𝙎𝙀 𝙎𝙀𝙓𝙔 💋💦",
-            "𝐓ᴇʀɪ 𝐌ᴜᴍᴍʏ 𝐂ʜᴏᴅ 𝐃ɪ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  𝐍ᴇ 𝐁ᴡᴀʜᴀʜᴀʜᴀ ⚜"
+            "𝐓ᴇʀɪ 𝐌ᴜᴍᴍʏ 𝐂ʜᴏᴅ 𝐃ɪ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  𝐍ᴇ 𝐁ᴡᴀʜᴀʜᴀʜᴀ ⚜",
         ]
 
         reply_texts = [
@@ -917,25 +932,181 @@ async def run_user_bot(session_string, chat_id):
             "𓂃˖˳·˖ ִֶָ ⋆💟͙⋆ ִֶָ˖·˳˖𓂃 ִֶָ⁀➴༯ 𝐒𝐋𝐀𝐕𝐄 ִֶָ. ..𓂃 ࣪ ִֶָ🌈་༘࿐ 𝐓𝐌𝐊𝐂 -/- ⋆˚💟 ݁˖⭑.ᐟ",
             "𓂃˖˳·˖ ִֶָ ⋆❣️͙⋆ ִֶָ˖·˳˖𓂃 ִֶָ⁀➴༯ 𝐒𝐋𝐀𝐕𝐄 ִֶָ. ..𓂃 ࣪ ִֶָ🌈་༘࿐ 𝐓𝐌𝐊𝐂 -/- ⋆˚❣️ ݁˖⭑.ᐟ",
             "𓂃˖˳·˖ ִֶָ ⋆❤️‍🔥͙⋆ ִֶָ˖·˳˖𓂃 ִֶָ⁀➴༯ 𝐒𝐋𝐀𝐕𝐄 ִֶָ. ..𓂃 ࣪ ִֶָ🌈་༘࿐ 𝐓𝐌𝐊𝐂 -/- ⋆˚❤️‍🔥 ݁˖⭑.ᐟ",
-            "𓂃˖˳·˖ ִֶָ ⋆❤️‍🩹͙⋆ ִֶָ˖·˳˖𓂃 ִֶָ⁀➴༯ 𝐒𝐋𝐀𝐕𝐄 ִֶָ. ..𓂃 ࣪ ִֶָ🌈་༘࿐ 𝐓𝐌𝐊𝐂 -/- ⋆˚❤️‍🩹 ݁˖⭑.ᐟ"
+            "𓂃˖˳·˖ ִֶָ ⋆❤️‍🩹͙⋆ ִֶָ˖·˳˖𓂃 ִֶָ⁀➴༯ 𝐒𝐋𝐀𝐕𝐄 ִֶָ. ..𓂃 ࣪ ִֶָ🌈་༘࿐ 𝐓𝐌𝐊𝐂 -/- ⋆˚❤️‍🩹 ݁˖⭑.ᐟ",
         ]
 
+        # ─── DEATHGOD REPLIES ────────────────────────────────────────────────────
+        deathgod_replies = [
+              "𝐊ʏᴀ 𝐑ᴇ 𝐑ᴀɴᴅɪᴋᴇ 𝐂ᴏᴏʟ ",
+            "𝚃𝙴𝚁𝙸 𝐌ᴀᴀ 𝐌ᴀʀʀ 𝐆ᴀʏɪ 𝐘ᴀᴀʀ - 𝐉ᴀɪ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️   ! 🌙",
+            "acha beta 😂🔥👊🏻 koi na me toh TUJHE Choduga 😹💔🔥😆👊🏻💥",
+            "chudke bhaga kaise 😂💥🤣🤘🏻",
+            "ne toh  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  ka lun muh me lelia 😂🙏🏻😂🙏🏻",
+            "try maa सूर्य☀ nikalte hi pel du 😹🔥💔",
+            "mkl lun te vaj 😂✊🏻💦",
+            "𝗧ᴍᴋ𝗕 pe  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  ka hamla 😂⚔🔥💥",
+            "𝐂ʜʟ 𝐇ᴀʀᴍᴢᴀᴅ𝐈 𝐊ᴇ लड़के 💛🤍🩵",
+            "oi 𝐓ᴇʀɪ 𝐌‌ᴀᴀ गुलाम ₰🖤",
+            "chl rndyce chud ke dikha 😂💥🤣🔥",
+            "𝐊ɪ 𝐌ᴀᴀ 𝐌ᴀʀʀ 𝐆ᴀʏɪ naacho 💃🏻💃🏻🕺🏻🎶😂😆💞🔥 !",
+            "tera baap bass  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  hai 😂🎀",
+            " try maa hagte hue paad mari -#😹🔥🥀",
+            "  𝐓ᴇʀɪ 𝐌ᴜᴍᴍʏ 𝐂ʜᴏᴅ 𝐃ɪ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  𝐍ᴇ 𝐁ᴡᴀʜᴀʜᴀʜᴀ ⚜",
+            "𝐊ʏᴀ 𝐑ᴇ 𝐑ᴀɴᴅɪᴋᴇ 𝐂ᴏᴏʟ 𝐁ᴀɴᴇɢᴀ 𝐓ᴜ 𝐂ʜᴀʟ 𝐀ʙ 𝐂ʜᴜᴅ 𝐀ᴘɴᴇ 𝐁ᴀᴀᴘ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  𝐒ᴇ - 🦢💘",
+            "𝐊ɪ 𝐌ᴀᴀ 𝐌ᴀʀʀ 𝐆ᴀʏɪ 𝐘ᴀᴀʀ - 𝐉ᴀɪ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  ! 🌙",
+            "acha beta 😂🔥👊🏻 koi na me toh TUJHE Choduga 😹💔🔥😆👊🏻💥",
+            "chudke bhaga kaise 😂💥🤣🤘🏻",
+            "ne toh  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  ka lun muh me lelia 😂🙏🏻😂🙏🏻",
+            "try maa सूर्य☀ nikalte hi pel du 😹🔥💔",
+            "mkl lun te vaj 😂✊🏻💦",
+            "𝗧ᴍᴋ𝗕 pe  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  ka hamla 😂⚔🔥💥",
+            "𝐂ʜʟ 𝐇ᴀʀᴍᴢᴀᴅ𝐈 𝐊ᴇ लड़के 💛🤍🩵",
+            "oi 𝐓ᴇʀɪ 𝐌‌ᴀᴀ गुलाम ₰🖤",
+            "chl rndyce chud ke dikha 😂💥🤣🔥",
+            "𝐊ɪ 𝐌ᴀᴀ 𝐌ᴀʀʀ 𝐆ᴀʏɪ naacho 💃🏻💃🏻🕺🏻🎶😂😆💞🔥 !",
+            "tera baap bass  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  hai 😂🎀",
+            " T 𝒦𝐼 𝑀𝒜𝒜 𝐵𝐻𝐸𝒩 𝐾♡ 𝑅𝒜𝒩𝒟𝐼 𝐵𝒜𝒩𝒜 𝒦𝒜  𝒞𝐻♡𝒟𝒰𝒰😹🥀",
+            "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝙁𝙐𝘾𝙆 𝙃𝙄𝙎 𝙈𝙊𝙈 𝙋𝙍𝙊𝙋𝙀𝙍𝙇𝙔",
+            "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝘼𝙎𝙆 𝙃𝙄𝙈 𝙏𝙊 𝘾𝙊𝙑𝙀𝙍 𝙃𝙄𝙎 𝙈𝙊𝙈'𝙎 𝘼𝙎𝙎",
+            "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝙁𝙄𝙓 𝙈𝙔 𝘼‌𝙋𝙋𝙊𝙄𝙉𝙏𝙈𝙀𝙉𝙏 𝙒𝙄𝙏𝙃 𝙃𝙄𝙎 𝙎𝙄𝙎",
+            "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝙁𝙐𝘾𝙆 𝘼𝙉𝘿 𝙏𝙃𝙍𝙊𝙒 𝙏𝙃𝙄𝙎 𝙂𝘼𝙍𝙀𝙀𝘽 𝙎𝙊𝙉",
+            "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝘿𝙊 𝙉𝙊𝙏 𝙎𝙏𝙊𝙋 𝙁𝙐𝘾𝙆𝙄𝙉𝙂 𝙈𝙔 𝙂𝙐𝙇𝘼‌𝙈",
+            "𝙂𝙀𝙈𝙄𝙉𝙄 𝙎𝘼𝙄𝘿  𝙄𝙎 𝙍𝙉𝘿𝙔 𝙋𝙐𝙏𝙍𝘼",
+            "𝙋𝙀𝙍𝙋𝙇𝙀𝙓𝙄𝙏𝙔 𝙎𝘼𝙄𝘿 This 𝙄𝙎 𝙂𝙐𝙇𝘼𝙈",
+            "𝙂𝙍𝙊𝙆 𝘼𝙄 𝙎𝘼𝙄𝘿 𝙄𝙎 𝙂𝘼𝙍𝙀𝙀𝘽",
+            "𝘽𝙊𝙏 𝙎𝘼‌𝙄𝘿  𝙄𝙎 𝘾𝙃𝙐𝘿𝘼𝙆𝘼𝘿",
+            "𝙈𝙊𝘿𝙄 𝙎𝘼‌𝙄𝘿  𝙄𝙎 𝙋𝙊𝙇𝙀 𝘿𝘼𝙉𝘾𝙀𝙍",
+            "𝙏𝙍𝙐𝙈𝙋 𝙎𝘼𝙄𝘿 THis 𝙄𝙎 𝘽𝙇𝙊𝙊𝘿Y 𝙈𝙊𝙏𝙃𝙀𝙍𝙁*\"𝘾𝙆𝙀𝙍",
+            "𝗧𝗢𝗛𝗔𝗥 𝗠𝗨𝗠𝗠𝗬 𝗞𝗜 𝗖𝗛𝗨𝗨‌𝗧 𝗠𝗘𝗜 𝗣𝗨𝗥𝗜 𝗞𝗜 𝗣𝗨𝗥𝗜 𝗞𝗜𝗡𝗚𝗙𝗜𝗦𝗛𝗘𝗥 𝗞𝗜 𝗕𝗢𝗧𝗧𝗟𝗘 𝗗𝗔𝗟 𝗞𝗘 𝗧𝗢𝗗 𝗗𝗨𝗡𝗚𝗔 𝗔𝗡𝗗𝗘𝗥 𝗛𝗜 😱😂🤩",
+            "𝐓𝐄𝐑𝐈 𝐌𝐀𝐀 𝐊𝐈 𝐂𝐇𝐔𝐓 𝐌𝐄 ✋ 𝐇𝐀𝐓𝐓𝐇 𝐃𝐀𝐋𝐊𝐄 👶 𝐁𝐀𝐂𝐂𝐇𝐄 𝐍𝐈𝐊𝐀𝐋 𝐃𝐔𝐍𝐆𝐀 😍",
+            "𝐓𝐄𝐑𝐀 𝐏𝐄𝐇𝐋𝐀 𝐁𝐀𝐀𝐏 𝐇𝐔 𝐌𝐀𝐃𝐀𝐑𝐂𝐇𝐎𝐃",
+            "𝗧𝗘𝗥𝗜 𝗠𝗨𝗠𝗠𝗬 𝗞𝗘 𝗦𝗔𝗔𝗧𝗛 𝗟𝗨𝗗𝗼 𝗞𝗛𝗘𝗟𝗧𝗘 𝗞𝗛𝗘𝗟𝗧𝗘 𝗨𝗦𝗞𝗘 𝗠𝗨𝗛 𝗠𝗘 𝗔𝗣𝗡𝗔 𝗟𝗢𝗗𝗔 𝗗𝗘 𝗗𝗨𝗡𝗚𝗔☝🏻☝🏻😬",
+            "𝗧𝗘𝗥𝗜 𝗠𝗔‌𝗔‌ 𝗞𝗜 𝗖𝗛𝗨𝗨‌𝗧 𝗠𝗘 𝗦𝗨𝗧𝗟𝗜 𝗕𝗢𝗠𝗕 𝗙𝗢𝗗 𝗗𝗨𝗡𝗚𝗔 𝗧𝗘𝗥𝗜 𝗠𝗔‌𝗔‌ 𝗞𝗜 𝗝𝗛𝗔𝗔𝗧𝗘 𝗝𝗔𝗟 𝗞𝗘 𝗞𝗛𝗔𝗔𝗞 𝗛𝗢 𝗝𝗔𝗬𝗘𝗚𝗜💣🔥",
+            "𝐓𝐄𝐑𝐈 𝐕𝐀𝐇𝐄𝐈𝐍 𝐊𝐎 𝐀𝐏𝐍𝐄 𝐋𝐔𝐍𝐃 𝐏𝐑 𝐈𝐓𝐍𝐀 𝐉𝐇𝐔𝐋𝐀𝐀𝐔𝐍𝐆𝐀 𝐊𝐈 𝐉𝐇𝐔𝐋𝐓𝐄 𝐉𝐇𝐔𝐋𝐓𝐄 𝐇𝐈 𝐁𝐀𝐂𝐇𝐀 𝐏𝐀𝐈𝐃𝐀 𝐊𝐑 𝐃𝐄𝐆𝐈 💦💋",
+            "𝐆𝐀𝐋𝐈 𝐆𝐀𝐋𝐈 𝐌𝐄 𝐑𝐄𝐇𝐓𝐀 𝐇𝐄 𝐒𝐀𝐍𝐃 𝐓𝐄𝐑𝐈 𝐌𝐀𝐀𝐊𝐎 𝐂𝐇𝐎𝐃 𝐃𝐀𝐋𝐀 𝐎𝐑 𝐁𝐀𝐍𝐀 𝐃𝐈𝐀 𝐑𝐀𝐍𝐃 🤤🤣",
+            "𝐒𝐀𝐁 𝐁𝐎𝐋𝐓𝐄 𝐌𝐔𝐉𝐇𝐊𝐎 𝐏𝐀𝐏𝐀 𝐊𝐘𝐎𝐔𝐍𝐊𝐈 𝐌𝐄𝐍𝐄 𝐁𝐀𝐍𝐀𝐃𝐈𝐀 𝐓𝐄𝐑𝐈 𝐌𝐀𝐀𝐊𝐎 𝐏𝐑𝐄𝐆𝐍𝐄𝐍𝐓 🤣🤣",
+            "𝙏𝙀𝙍𝙄 𝘽𝙀𝙃𝙀𝙉 𝙇𝙀𝙏𝙄 𝙈𝙀𝙍𝙄 𝙇𝙐𝙉𝘿 𝘽𝘼𝘿𝙀 𝙈𝘼𝙎𝙏𝙄 𝙎𝙀 𝙏𝙀𝙍𝙄 𝘽𝙀𝙃𝙀𝙉 𝙆𝙊 𝙈𝙀𝙉𝙀 𝘾𝙃𝙊𝘿 𝘿𝘼𝙇𝘼 𝘽𝙊𝙃𝙊𝙏 𝙎𝘼𝙎𝙏𝙀 𝙎𝙀",
+            "𝗧𝗘𝗥𝗜 𝗠𝗔‌𝗔‌ 𝗞𝗜 𝗖𝗛𝗨𝗨‌𝗧 𝗠𝗘 𝗖𝗛𝗔𝗡𝗚𝗘𝗦 𝗖𝗢𝗠𝗠𝗜𝗧 𝗞𝗥𝗨𝗚𝗔 𝗙𝗜𝗥 𝗧𝗘𝗥𝗜 𝗕𝗛𝗘𝗘𝗡 𝗞𝗜 𝗖𝗛𝗨𝗨‌𝗧 𝗔𝗨𝗧𝗢𝗠𝗔𝗧𝗜𝗖𝗔𝗟𝗟𝗬 𝗨𝗣𝗗𝗔𝗧𝗘 𝗛𝗢𝗝𝗔𝗔𝗬𝗘𝗚𝗜🤖🙏🤔",
+            "𝐓𝐄𝐑𝐈 𝐌𝐀𝐀𝐀𝐊𝐈 𝐂𝐇𝐔𝐃𝐀𝐈 𝐊𝐎 𝐏𝐎𝐑𝐍𝐇𝐔𝐁.𝐂𝐎𝐌 𝐏𝐄 𝐔𝐏𝐋𝐎𝐀𝐃 𝐊𝐀𝐑𝐃𝐔𝐍𝐆𝐀 𝐒𝐔𝐀𝐑 𝐊𝐄 𝐂𝐇𝐎𝐃𝐄 🤣💋💦",
+            "𝐓𝐄𝐑𝐈 𝐁𝐀𝐇𝐄𝐍 𝐊𝐈 𝐆𝐀𝐀𝐍𝐃 𝐌𝐄𝐈 𝐎𝐍𝐄𝐏𝐋𝐔𝐒 𝐊𝐀 𝐖𝐑𝐀𝐏 𝐂𝐇𝐀𝐑𝐆𝐄𝐑 𝟑𝟎𝐖 𝐇𝐈𝐆𝐇 𝐏𝐎𝐖𝐄𝐑 💥😂😎",
+            "𝐓𝐔𝐉𝐇𝐄 𝐀𝐁 𝐓𝐀𝐊 𝐍𝐀𝐇𝐈 𝐒𝐌𝐉𝐇 𝐀𝐘𝐀 𝐊𝐈 𝐌𝐀𝐈 𝐇𝐈 𝐇𝐔 𝐓𝐔𝐉𝐇𝐄 𝐏𝐀𝐈𝐃𝐀 𝐊𝐀𝐑𝐍𝐄 𝐖𝐀𝐋𝐀 𝐁𝐇𝐎𝐒𝐃𝐈𝐊𝐄𝐄 𝐀𝐏𝐍𝐈 𝐌𝐀𝐀 𝐒𝐄 𝐏𝐔𝐂𝐇 𝐑𝐀𝐍𝐃𝐈 𝐊𝐄 𝐁𝐀𝐂𝐇𝐄𝐄𝐄𝐄 🤩👊👤😍",
+            "𝐓𝐄𝐑𝐈 𝐁𝐀𝐇𝐄𝐍 𝐊𝐈 𝐂𝐇𝐔𝐓 𝐌𝐄𝐈 𝐀𝐏𝐏𝐋𝐄 𝐊𝐀 𝟏𝟖𝐖 𝐖𝐀𝐋𝐀 𝐂𝐇𝐀𝐑𝐆𝐄𝐑 🔥🤩",
+            "𝗧𝗘𝗥𝗜 𝗠𝗔‌𝗔‌ 𝗞𝗢 𝗜𝗧𝗡𝗔 𝗖𝗛𝗢𝗗𝗨𝗡𝗚𝗔 𝗞𝗜 𝗦𝗔𝗣𝗡𝗘 𝗠𝗘𝗜 𝗕𝗛𝗜 𝗠𝗘𝗥𝗜 𝗖𝗛𝗨𝗗𝗔𝗜 𝗬𝗔𝗔𝗗 𝗞𝗔𝗥𝗘𝗚𝗜 𝗥Æ𝗡𝗗𝗜 🥳😍👊💥",
+            "𝙋𝘼𝙋𝘼 𝙆𝙄 𝙎𝙋𝙀𝙀𝘿 𝙈𝙏𝘾𝙃 𝙉𝙃𝙄 𝙃𝙊 𝙍𝙃𝙄 𝙆𝙔𝘼",
+            "𝙆𝙄𝙏𝙉𝙄 𝘾𝙃𝙊𝘿𝙐 𝙏𝙀𝙍𝙄 𝙈𝘼 𝘼𝘽 𝙊𝙍..",
+            "𝗧𝗘𝗥𝗜 𝗠𝗔𝗨𝗦𝗜 𝗞𝗘 𝗕𝗛𝗢𝗦𝗗𝗘 𝗠𝗘𝗜 𝗜𝗡𝗗𝗜𝗔𝗡 𝗥𝗔𝗜𝗟𝗪𝗔𝗬 🚂💥😂",
+            "𝙆𝙄𝙏𝙉𝙄 𝙂𝙇𝙄𝙔𝘼 𝙋𝘿𝙒𝙀𝙂𝘼 𝘼𝙋𝙉𝙄 𝙈𝘼 𝙆𝙊",
+            "𝗧𝗘𝗥𝗜 𝗜𝗧𝗘𝗠 𝗞𝗜 𝗚𝗔𝗔𝗡𝗗 𝗠𝗘 𝗟𝗨𝗡𝗗 𝗗𝗔𝗔𝗟𝗞𝗘,𝗧𝗘𝗥𝗘 𝗝𝗔𝗜𝗦𝗔 𝗘𝗞 𝗢𝗥 𝗡𝗜𝗞𝗔𝗔𝗟 𝗗𝗨𝗡𝗚𝗔 𝗠𝗔‌𝗔‌𝗗𝗔𝗥𝗖𝗛Ø𝗗🤘🏻🙌🏻☠️",
+            "2 𝙍𝙐𝙋𝘼𝙔 𝙆𝙄 𝙋𝙀𝙋𝙎𝙄 𝙏𝙀𝙍𝙄 𝙈𝙐𝙈𝙈𝙔 𝙎𝘼𝘽𝙎𝙀 𝙎𝙀𝙓𝙔 💋💦",
+            "𝐓ᴇʀɪ 𝐌ᴜᴍᴍʏ 𝐂ʜᴏᴅ 𝐃ɪ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  𝐍ᴇ 𝐁ᴡᴀʜᴀʜᴀʜᴀ ⚜",
+            "⋆｡ﾟ☁︎｡𝐂ʏᴜ 𝐑ᴇ मदरचोद  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के सामने 𝐅ʏᴛᴇʀ 𝐁ᴀɴᴇɢᴀ ⋆𓂃 ོ☼𓂃 😂🔥",
+            "नहीं नहीं तेरी मां को 𝐒ɪʀғ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप चोद सकता है ִֶָ𓂃 ࣪ ִֶָ👑་༘࿐ sᴀᴍᴊʜᴀ ʀᴀɴᴅɪᴋᴇ ???",
+            "तेरी मां का 𝐒ᴛʏʟɪsʜ भोसड़ा 😱",
+            "𝑻𝒆𝒓𝒚 𝒎𝒂𝒂 𝒓𝒂𝒏𝒅𝒂𝒍 𝒉 𝒃𝒂𝒔 𝒃𝒂𝒂𝒕 𝒌𝒉𝒂𝒕𝒂𝒎 😡🔥",
+            "सोच तेरी बहन को  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप का गुलाम चोद रहा 😎🔥",
+            "Hello hello?? SAAS aarahi है? रण्डी पुत्र 🧘🏻",
+            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\\~ 👑 बाप से सही chudi 🥵🔥",
+            "ᴛᴜ ᴏʀ ᴛᴇʀɪ ᴍᴀᴀ ᴅᴏɴᴏ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के ʟɴᴅ sᴇ ᴋᴀʙʜɪ ᴜᴛʜ ɴʜɪ ᴘᴀʏᴇ 😂🔥",
+            "🇮🇳𝐵𝐻𝐴𝑅𝐴𝑇 𝐻𝐴𝑀𝐴𝑅𝐴 𝐷𝐸𝑆𝐻 𝐻 𝐴𝑈𝑅 𝑈𝑆 𝐷𝐸𝑆𝐻 𝑀𝐸 तेरी मां घर घर जाके SHAMBHOG करती है ! 🛐",
+            "⋆｡ﾟ☁︎｡𝐂ʏᴜ 𝐑ᴇ मदरचोद  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के सामने 𝐅ʏᴛᴇʀ 𝐁ᴀɴᴇɢᴀ ⋆𓂃 ོ☼𓂃 😂🔥",
+            "नहीं नहीं तेरी मां को 𝐒ɪʀғ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप चोद सकता है ִֶָ𓂃 ࣪ ִֶָ👑་༘࿐ sᴀᴍᴊʜᴀ ʀᴀɴᴅɪᴋᴇ ???",
+            "तेरी मां का 𝐒ᴛʏʟɪsʜ भोसड़ा 😱",
+            "𝑻𝒆𝒓𝒚 𝒎𝒂𝒂 𝒓𝒂𝒏𝒅𝒂𝒍 𝒉 𝒃𝒂𝒔 𝒃𝒂𝒂𝒕 𝒌𝒉𝒂𝒕𝒂𝒎 😡🔥",
+            "सोच तेरी बहन को  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप का गुलाम चोद रहा 😎🔥",
+            "Hello hello?? saas aarahi है? रण्डी पुत्र 🧘🏻",
+            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\\~ 👑 बाप से सही chudi 🥵🔥",
+            "ᴛᴜ ᴏʀ ᴛᴇʀɪ ᴍᴀᴀ ᴅᴏɴᴏ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के ʟɴᴅ sᴇ ᴋᴀʙʜɪ ᴜᴛʜ ɴʜɪ ᴘᴀʏᴇ 😂🔥",
+            "🇮🇳𝐵𝐻𝐴𝑅𝐴𝑇 𝐻𝐴𝑀𝐴𝑅𝐴 𝐷𝐸𝑆𝐻 𝐻 𝐴𝑈𝑅 𝑈𝑆 𝐷𝐸𝑆𝐻 𝑀𝐸 तेरी मां घर घर जाके SAMBHOG करती है ! 🛐",
+            "⋆｡ﾟ☁︎｡𝐂ʏᴜ 𝐑ᴇ मदरचोद  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के सामने 𝐅ʏᴛᴇʀ 𝐁ᴀɴᴇɢᴀ ⋆𓂃 ོ☼𓂃 😂🔥",
+            "नहीं नहीं तेरी मां को 𝐒ɪʀғ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप चोद सकता है ִֶָ𓂃 ࣪ ִֶָ👑་༘࿐ sᴀᴍᴊʜᴀ ʀᴀɴᴅɪᴋᴇ ???",
+            "तेरी मां का 𝐒ᴛʏʟɪsʜ भोसड़ा 😱",
+            "𝑻𝒆𝒓𝒚 𝒎𝒂𝒂 𝒓𝒂𝒏𝒅𝒂𝒍 𝒉 𝒃𝒂𝒔 𝒃𝒂𝒂𝒕 𝒌𝒉𝒂𝒕𝒂𝒎 😡🔥",
+            "सोच तेरी बहन को  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप का गुलाम चोद रहा 😎🔥",
+            "Hello hello?? SAAS aarahi है? रण्डी पुत्र 🧘🏻",
+            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\\~ 👑 बाप से सही chudi 🥵🔥",
+            "ᴛᴜ ᴏʀ ᴛᴇʀɪ ᴍᴀᴀ ᴅᴏɴᴏ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के ʟɴᴅ sᴇ ᴋᴀʙʜɪ ᴜᴛʜ ɴʜɪ ᴘᴀʏᴇ 😂🔥",
+            "🇮🇳𝐵𝐻𝐴𝑅𝐴𝑇 𝐻𝐴𝑀𝐴𝑅𝐴 𝐷𝐸𝑆𝐻 𝐻 𝐴𝑈𝑅 𝑈𝑆 𝐷𝐸𝑆𝐻 𝑀𝐸 तेरी मां घर घर जाके SAMBHOG करती है ! 🛐",
+            "⋆｡ﾟ☁︎｡𝐂ʏᴜ 𝐑ᴇ मदरचोद  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के सामने 𝐅ʏᴛᴇʀ 𝐁ᴀɴᴇɢᴀ ⋆𓂃 ོ☼𓂃 😂🔥",
+            "नहीं नहीं तेरी मां को 𝐒ɪʀғ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप चोद सकता है ִֶָ𓂃 ࣪ ִֶָ👑་༘࿐ sᴀᴍᴊʜᴀ ʀᴀɴᴅɪᴋᴇ ???",
+            "तेरी मां का 𝐒ᴛʏʟɪsʜ भोसड़ा 😱",
+            "𝑻𝒆𝒓𝒚 𝒎𝒂𝒂 𝒓𝒂𝒏𝒅𝒂𝒍 𝒉 𝒃𝒂𝒔 𝒃𝒂𝒂𝒕 𝒌𝒉𝒂𝒕𝒂𝒎 😡🔥",
+            "सोच तेरी बहन को  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप का गुलाम चोद रहा 😎🔥",
+            "Hello hello?? SAAS aarahi है? रण्डी पुत्र 🧘🏻",
+            "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\\~ 👑 बाप से सही chudi 🥵🔥",
+            "ᴛᴜ ᴏʀ ᴛᴇʀɪ ᴍᴀᴀ ᴅᴏɴᴏ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के ʟɴᴅ sᴇ ᴋᴀʙʜɪ ᴜᴛʜ ɴʜɪ ᴘᴀʏᴇ 😂🔥",
+            "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝙁𝙐𝘾𝙆 𝙃𝙄𝙎 𝙈𝙊𝙈 𝙋𝙍𝙊𝙋𝙀𝙍𝙇𝙔",
+            "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝘼𝙎𝙆 𝙃𝙄𝙈 𝙏𝙊 𝘾𝙊𝙑𝙀𝙍 𝙃𝙄𝙎 𝙈𝙊𝙈'𝙎 𝘼𝙎𝙎",
+            "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝙁𝙄𝙓 𝙈𝙔 𝘼‌𝙋𝙋𝙊𝙄𝙉𝙏𝙈𝙀𝙉𝙏 𝙒𝙄𝙏𝙃 𝙃𝙄𝙎 𝙎𝙄𝙎",
+            "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝙁𝙐𝘾𝙆 𝘼𝙉𝘿 𝙏𝙃𝙍𝙊𝙒 𝙏𝙃𝙄𝙎 𝙂𝘼𝙍𝙀𝙀𝘽 𝙎𝙊𝙉",
+            "𝙃𝙀𝙔 𝙂𝙊𝙊𝙂𝙇𝙀 𝘿𝙊 𝙉𝙊𝙏 𝙎𝙏𝙊𝙋 𝙁𝙐𝘾𝙆𝙄𝙉𝙂 𝙈𝙔 𝙂𝙐𝙇𝘼‌𝙈",
+            "𝙂𝙀𝙈𝙄𝙉𝙄 𝙎𝘼𝙄𝘿  𝙄𝙎 𝙍𝙉𝘿𝙔 𝙋𝙐𝙏𝙍𝘼",
+            "𝙋𝙀𝙍𝙋𝙇𝙀𝙓𝙄𝙏𝙔 𝙎𝘼𝙄𝘿 This 𝙄𝙎 𝙂𝙐𝙇𝘼𝙈",
+            "𝙂𝙍𝙊𝙆 𝘼𝙄 𝙎𝘼𝙄𝘿 𝙄𝙎 𝙂𝘼𝙍𝙀𝙀𝘽",
+            "𝘽𝙊𝙏 𝙎𝘼‌𝙄𝘿  𝙄𝙎 𝘾𝙃𝙐𝘿𝘼𝙆𝘼𝘿",
+            "𝙈𝙊𝘿𝙄 𝙎𝘼‌𝙄𝘿  𝙄𝙎 𝙋𝙊𝙇𝙀 𝘿𝘼𝙉𝘾𝙀𝙍",
+            "𝙏𝙍𝙐𝙈𝙋 𝙎𝘼𝙄𝘿 THis 𝙄𝙎 𝘽𝙇𝙊𝙊𝘿Y 𝙈𝙊𝙏𝙃𝙀𝙍𝙁*\"𝘾𝙆𝙀𝙍",
+            "𝗧𝗢𝗛𝗔𝗥 𝗠𝗨𝗠𝗠𝗬 𝗞𝗜 𝗖𝗛𝗨𝗨‌𝗧 𝗠𝗘𝗜 𝗣𝗨𝗥𝗜 𝗞𝗜 𝗣𝗨𝗥𝗜 𝗞𝗜𝗡𝗚𝗙𝗜𝗦𝗛𝗘𝗥 𝗞𝗜 𝗕𝗢𝗧𝗧𝗟𝗘 𝗗𝗔𝗟 𝗞𝗘 𝗧𝗢𝗗 𝗗𝗨𝗡𝗚𝗔 𝗔𝗡𝗗𝗘𝗥 𝗛𝗜 😱😂🤩",
+            "𝐓𝐄𝐑𝐈 𝐌𝐀𝐀 𝐊𝐈 𝐂𝐇𝐔𝐓 𝐌𝐄 ✋ 𝐇𝐀𝐓𝐓𝐇 𝐃𝐀𝐋𝐊𝐄 👶 𝐁𝐀𝐂𝐂𝐇𝐄 𝐍𝐈𝐊𝐀𝐋 𝐃𝐔𝐍𝐆𝐀 😍",
+            "𝐓𝐄𝐑𝐀 𝐏𝐄𝐇𝐋𝐀 𝐁𝐀𝐀𝐏 𝐇𝐔 𝐌𝐀𝐃𝐀𝐑𝐂𝐇𝐎𝐃",
+            "𝗧𝗘𝗥𝗜 𝗠𝗨𝗠𝗠𝗬 𝗞𝗘 𝗦𝗔𝗔𝗧𝗛 𝗟𝗨𝗗𝗼 𝗞𝗛𝗘𝗟𝗧𝗘 𝗞𝗛𝗘𝗟𝗧𝗘 𝗨𝗦𝗞𝗘 𝗠𝗨𝗛 𝗠𝗘 𝗔𝗣𝗡𝗔 𝗟𝗢𝗗𝗔 𝗗𝗘 𝗗𝗨𝗡𝗚𝗔☝🏻☝🏻😬",
+            "𝗧𝗘𝗥𝗜 𝗠𝗔‌𝗔‌ 𝗞𝗜 𝗖𝗛𝗨𝗨‌𝗧 𝗠𝗘 𝗦𝗨𝗧𝗟𝗜 𝗕𝗢𝗠𝗕 𝗙𝗢𝗗 𝗗𝗨𝗡𝗚𝗔 𝗧𝗘𝗥𝗜 𝗠𝗔‌𝗔‌ 𝗞𝗜 𝗝𝗛𝗔𝗔𝗧𝗘 𝗝𝗔𝗟 𝗞𝗘 𝗞𝗛𝗔𝗔𝗞 𝗛𝗢 𝗝𝗔𝗬𝗘𝗚𝗜💣🔥",
+            "𝐓𝐄𝐑𝐈 𝐕𝐀𝐇𝐄𝐈𝐍 𝐊𝐎 𝐀𝐏𝐍𝐄 𝐋𝐔𝐍𝐃 𝐏𝐑 𝐈𝐓𝐍𝐀 𝐉𝐇𝐔𝐋𝐀𝐀𝐔𝐍𝐆𝐀 𝐊𝐈 𝐉𝐇𝐔𝐋𝐓𝐄 𝐉𝐇𝐔𝐋𝐓𝐄 𝐇𝐈 𝐁𝐀𝐂𝐇𝐀 𝐏𝐀𝐈𝐃𝐀 𝐊𝐑 𝐃𝐄𝐆𝐈 💦💋",
+            "𝐆𝐀𝐋𝐈 𝐆𝐀𝐋𝐈 𝐌𝐄 𝐑𝐄𝐇𝐓𝐀 𝐇𝐄 𝐒𝐀𝐍𝐃 𝐓𝐄𝐑𝐈 𝐌𝐀𝐀𝐊𝐎 𝐂𝐇𝐎𝐃 𝐃𝐀𝐋𝐀 𝐎𝐑 𝐁𝐀𝐍𝐀 𝐃𝐈𝐀 𝐑𝐀𝐍𝐃 🤤🤣",
+            "𝐒𝐀𝐁 𝐁𝐎𝐋𝐓𝐄 𝐌𝐔𝐉𝐇𝐊𝐎 𝐏𝐀𝐏𝐀 𝐊𝐘𝐎𝐔𝐍𝐊𝐈 𝐌𝐄𝐍𝐄 𝐁𝐀𝐍𝐀𝐃𝐈𝐀 𝐓𝐄𝐑𝐈 𝐌𝐀𝐀𝐊𝐎 𝐏𝐑𝐄𝐆𝐍𝐄𝐍𝐓 🤣🤣",
+            "𝙏𝙀𝙍𝙄 𝘽𝙀𝙃𝙀𝙉 𝙇𝙀𝙏𝙄 𝙈𝙀𝙍𝙄 𝙇𝙐𝙉𝘿 𝘽𝘼𝘿𝙀 𝙈𝘼𝙎𝙏𝙄 𝙎𝙀 𝙏𝙀𝙍𝙄 𝘽𝙀𝙃𝙀𝙉 𝙆𝙊 𝙈𝙀𝙉𝙀 𝘾𝙃𝙊𝘿 𝘿𝘼𝙇𝘼 𝘽𝙊𝙃𝙊𝙏 𝙎𝘼𝙎𝙏𝙀 𝙎𝙀",
+            "𝗧𝗘𝗥𝗜 𝗠𝗔‌𝗔‌ 𝗞𝗜 𝗖𝗛𝗨𝗨‌𝗧 𝗠𝗘 𝗖𝗛𝗔𝗡𝗚𝗘𝗦 𝗖𝗢𝗠𝗠𝗜𝗧 𝗞𝗥𝗨𝗚𝗔 𝗙𝗜𝗥 𝗧𝗘𝗥𝗜 𝗕𝗛𝗘𝗘𝗡 𝗞𝗜 𝗖𝗛𝗨𝗨‌𝗧 𝗔𝗨𝗧𝗢𝗠𝗔𝗧𝗜𝗖𝗔𝗟𝗟𝗬 𝗨𝗣𝗗𝗔𝗧𝗘 𝗛𝗢𝗝𝗔𝗔𝗬𝗘𝗚𝗜🤖🙏🤔",
+            "𝐓𝐄𝐑𝐈 𝐌𝐀𝐀𝐀𝐊𝐈 𝐂𝐇𝐔𝐃𝐀𝐈 𝐊𝐎 𝐏𝐎𝐑𝐍𝐇𝐔𝐁.𝐂𝐎𝐌 𝐏𝐄 𝐔𝐏𝐋𝐎𝐀𝐃 𝐊𝐀𝐑𝐃𝐔𝐍𝐆𝐀 𝐒𝐔𝐀𝐑 𝐊𝐄 𝐂𝐇𝐎𝐃𝐄 🤣💋💦",
+            "𝐓𝐄𝐑𝐈 𝐁𝐀𝐇𝐄𝐍 𝐊𝐈 𝐆𝐀𝐀𝐍𝐃 𝐌𝐄𝐈 𝐎𝐍𝐄𝐏𝐋𝐔𝐒 𝐊𝐀 𝐖𝐑𝐀𝐏 𝐂𝐇𝐀𝐑𝐆𝐄𝐑 𝟑𝟎𝐖 𝐇𝐈𝐆𝐇 𝐏𝐎𝐖𝐄𝐑 💥😂😎",
+            "𝐓𝐔𝐉𝐇𝐄 𝐀𝐁 𝐓𝐀𝐊 𝐍𝐀𝐇𝐈 𝐒𝐌𝐉𝐇 𝐀𝐘𝐀 𝐊𝐈 𝐌𝐀𝐈 𝐇𝐈 𝐇𝐔 𝐓𝐔𝐉𝐇𝐄 𝐏𝐀𝐈𝐃𝐀 𝐊𝐀𝐑𝐍𝐄 𝐖𝐀𝐋𝐀 𝐁𝐇𝐎𝐒𝐃𝐈𝐊𝐄𝐄 𝐀𝐏𝐍𝐈 𝐌𝐀𝐀 𝐒𝐄 𝐏𝐔𝐂𝐇 𝐑𝐀𝐍𝐃𝐈 𝐊𝐄 𝐁𝐀𝐂𝐇𝐄𝐄𝐄𝐄 🤩👊👤😍",
+            "𝐓𝐄𝐑𝐈 𝐁𝐀𝐇𝐄𝐍 𝐊𝐈 𝐂𝐇𝐔𝐓 𝐌𝐄𝐈 𝐀𝐏𝐏𝐋𝐄 𝐊𝐀 𝟏𝟖𝐖 𝐖𝐀𝐋𝐀 𝐂𝐇𝐀𝐑𝐆𝐄𝐑 🔥🤩",
+            "𝗧𝗘𝗥𝗜 𝗠𝗔‌𝗔‌ 𝗞𝗢 𝗜𝗧𝗡𝗔 𝗖𝗛𝗢𝗗𝗨𝗡𝗚𝗔 𝗞𝗜 𝗦𝗔𝗣𝗡𝗘 𝗠𝗘𝗜 𝗕𝗛𝗜 𝗠𝗘𝗥𝗜 𝗖𝗛𝗨𝗗𝗔𝗜 𝗬𝗔𝗔𝗗 𝗞𝗔𝗥𝗘𝗚𝗜 𝗥Æ𝗡𝗗𝗜 🥳😍👊💥",
+            "𝙋𝘼𝙋𝘼 𝙆𝙄 𝙎𝙋𝙀𝙀𝘿 𝙈𝙏𝘾𝙃 𝙉𝙃𝙄 𝙃𝙊 𝙍𝙃𝙄 𝙆𝙔𝘼",
+            "𝙆𝙄𝙏𝙉𝙄 𝘾𝙃𝙊𝘿𝙐 𝙏𝙀𝙍𝙄 𝙈𝘼 𝘼𝘽 𝙊𝙍..",
+            "𝗧𝗘𝗥𝗜 𝗠𝗔𝗨𝗦𝗜 𝗞𝗘 𝗕𝗛𝗢𝗦𝗗𝗘 𝗠𝗘𝗜 𝗜𝗡𝗗𝗜𝗔𝗡 𝗥𝗔𝗜𝗟𝗪𝗔𝗬 🚂💥😂",
+            "𝙆𝙄𝙏𝙉𝙄 𝙂𝙇𝙄𝙔𝘼 𝙋𝘿𝙒𝙀𝙂𝘼 𝘼𝙋𝙉𝙄 𝙈𝘼 𝙆𝙊",
+            "𝗧𝗘𝗥𝗜 𝗜𝗧𝗘𝗠 𝗞𝗜 𝗚𝗔𝗔𝗡𝗗 𝗠𝗘 𝗟𝗨𝗡𝗗 𝗗𝗔𝗔𝗟𝗞𝗘,𝗧𝗘𝗥𝗘 𝗝𝗔𝗜𝗦𝗔 𝗘𝗞 𝗢𝗥 𝗡𝗜𝗞𝗔𝗔𝗟 𝗗𝗨𝗡𝗚𝗔 𝗠𝗔‌𝗔‌𝗗𝗔𝗥𝗖𝗛Ø𝗗🤘🏻🙌🏻☠️",
+            "2 𝙍𝙐𝙋𝘼𝙔 𝙆𝙄 𝙋𝙀𝙋𝙎𝙄 𝙏𝙀𝙍𝙄 𝙈𝙐𝙈𝙈𝙔 𝙎𝘼𝘽𝙎𝙀 𝙎𝙀𝙓𝙔 💋💦",
+            "🇮🇳𝐵𝐻𝐴𝑅𝐴𝑇 𝐻𝐴𝑀𝐴𝑅𝐴 𝐷𝐸𝑆𝐻 𝐻 𝐴𝑈𝑅 𝑈𝑆 𝐷𝐸𝑆𝐻 𝑀𝐸 तेरी मां घर घर जाके SAMBHOG करती है ! 🛐"
+             "तेरे मां के दूदू के बीच मेरा lund fas gaya oops 🤪（ ͜.🍆 ͜.）",
+            "𝐓ᴇʀʏ 𝐁ʜᴇ𝐍 𝐊ᴇ ( ͜. ㅅ ͜. )🥛 ʏᴜᴍᴍʏ ",
+            "𓂃☁︎ 𓂃𝐒ɪᴅᴇ 𝐇ᴀᴛ 𝐆ᴜʟᴀᴍ 𝐓ᴇʀʏ 𝐌ᴀᴀ 𝐊ᴏ 𝐂ʜᴏᴅɴᴇ  मेरी रेलगाड़ी आ रही .-‘🚂-‘.ᯓᡣ𐭩______ 𓂃☁︎ 𓂃",
+            "˙✧˖°📷༘ ⋆｡° 𝐓ᴇʀʏ 𝐌ᴀ  𝐊ᴀ 𝐂ʜɪʟᴅ 𝐏ᴏʀɴ 𝐑ᴇᴄᴏʀᴅ 𝐇ᴏɢʏᴀ 𝐀ʙ 𝐓ᴏ 𝐒ɪᴅʜᴀ 𝐕ɪʀᴀʟ 𝐇ᴏɢᴀ 𝐘ᴇ ˙✧˖°📷༘ ⋆｡°",
+            "𓂃✍︎ 𝑵ʏ 𝑵ʏ 𝑨ʙ 𝑲ᴜᴄʜ 𝑵ʏ 𝑯ᴏ 𝑺ᴋᴛᴀ 𝑻ᴇʀɪ  𝑪ᴜᴅᴀɪ 𝑲ɪ 𝑺ᴄʀɪᴘᴛ 𝑨ʙ 𝑳ᴇᴀᴋ 𝑯ᴏᴋᴇ 𝑯ʏ 𝑴ᴀɴᴇɢɪ 𓂃✍︎",
+            "⋆⭒˚.⋆🔭 𝐒ʜᴜᴛ 𝐔ᴘ 𝐑ᴀɴᴅɪᴋᴇ 𝐓ᴇʀɪ 𝐌ᴀᴀ 𝐊ɪ 𝐂ʜᴜᴅᴀɪ 𝐄ɴᴊᴏʏ 𝐊ʀ 𝐑ᴀʜᴀ 𝐓ᴇʟᴇ𝐒ᴄᴏᴘᴇ 𝐒ᴇ⋆⭒˚.⋆🔭",
+            "तेरे मां के दूदू के बीच मेरा lund fas gaya oops 🤪（ ͜.🍆 ͜.）",
+            "𝐓ᴇʀʏ 𝐁ʜᴇ𝐍 𝐊ᴇ ( ͜. ㅅ ͜. )🥛 ʏᴜᴍᴍʏ ",
+            "𓂃☁︎ 𓂃𝐒ɪᴅᴇ 𝐇ᴀᴛ 𝐆ᴜʟᴀᴍ 𝐓ᴇʀʏ 𝐌ᴀᴀ 𝐊ᴏ 𝐂ʜᴏᴅɴᴇ  मेरी रेलगाड़ी आ रही .-‘🚂-‘.ᯓᡣ𐭩______ 𓂃☁︎ 𓂃",
+            "˙✧˖°📷༘ ⋆｡° 𝐓ᴇʀʏ 𝐌ᴀ  𝐊ᴀ 𝐂ʜɪʟᴅ 𝐏ᴏʀɴ 𝐑ᴇᴄᴏʀᴅ 𝐇ᴏɢʏᴀ 𝐀ʙ 𝐓ᴏ 𝐒ɪᴅʜᴀ 𝐕ɪʀᴀʟ 𝐇ᴏɢᴀ 𝐘ᴇ ˙✧˖°📷༘ ⋆｡°",
+            "𓂃✍︎ 𝑵ʏ 𝑵ʏ 𝑨ʙ 𝑲ᴜᴄʜ 𝑵ʏ 𝑯ᴏ 𝑺ᴋᴛᴀ 𝑻ᴇʀɪ  𝑪ᴜᴅᴀɪ 𝑲ɪ 𝑺ᴄʀɪᴘᴛ 𝑨ʙ 𝑳ᴇᴀᴋ 𝑯ᴏᴋᴇ 𝑯ʏ 𝑴ᴀɴᴇɢɪ 𓂃✍︎",
+            "⋆⭒˚.⋆🔭 𝐒ʜᴜᴛ 𝐔ᴘ 𝐑ᴀɴᴅɪᴋᴇ 𝐓ᴇʀɪ 𝐌ᴀᴀ 𝐊ɪ 𝐂ʜᴜᴅᴀɪ 𝐄ɴᴊᴏʏ 𝐊ʀ 𝐑ᴀʜᴀ 𝐓ᴇʟᴇ𝐒ᴄᴏᴘᴇ 𝐒ᴇ⋆⭒˚.⋆🔭",
+            "तेरे मां के दूदू के बीच मेरा lund fas gaya oops 🤪（ ͜.🍆 ͜.）",
+            "𝐓ᴇʀʏ 𝐁ʜᴇ𝐍 𝐊ᴇ ( ͜. ㅅ ͜. )🥛 ʏᴜᴍᴍʏ ",
+            "𓂃☁︎ 𓂃𝐒ɪᴅᴇ 𝐇ᴀᴛ 𝐆ᴜʟᴀᴍ 𝐓ᴇʀʏ 𝐌ᴀᴀ 𝐊ᴏ 𝐂ʜᴏᴅɴᴇ  मेरी रेलगाड़ी आ रही .-‘🚂-‘.ᯓᡣ𐭩______ 𓂃☁︎ 𓂃",
+            "˙✧˖°📷༘ ⋆｡° 𝐓ᴇʀʏ 𝐌ᴀ  𝐊ᴀ 𝐂ʜɪʟᴅ 𝐏ᴏʀɴ 𝐑ᴇᴄᴏʀᴅ 𝐇ᴏɢʏᴀ 𝐀ʙ 𝐓ᴏ 𝐒ɪᴅʜᴀ 𝐕ɪʀᴀʟ 𝐇ᴏɢᴀ 𝐘ᴇ ˙✧˖°📷༘ ⋆｡°",
+            "𓂃✍︎ 𝑵ʏ 𝑵ʏ 𝑨ʙ 𝑲ᴜᴄʜ 𝑵ʏ 𝑯ᴏ 𝑺ᴋᴛᴀ 𝑻ᴇʀɪ  𝑪ᴜᴅᴀɪ 𝑲ɪ 𝑺ᴄʀɪᴘᴛ 𝑨ʙ 𝑳ᴇᴀᴋ 𝑯ᴏᴋᴇ 𝑯ʏ 𝑴ᴀɴᴇɢɪ 𓂃✍︎",
+            "⋆⭒˚.⋆🔭 𝐒ʜᴜᴛ 𝐔ᴘ 𝐑ᴀɴᴅɪᴋᴇ 𝐓ᴇʀɪ 𝐌ᴀᴀ 𝐊ɪ 𝐂ʜᴜᴅᴀɪ 𝐄ɴᴊᴏʏ 𝐊ʀ 𝐑ᴀʜᴀ 𝐓ᴇʟᴇ𝐒ᴄᴏᴘᴇ 𝐒ᴇ⋆⭒˚.⋆🔭"
+             ོ༘₊⁺🇮🇳 ₊⁺⋆.˚ 𝐓ᴇʀɪ 𝐌ᴀᴀ 𝐊ᴇ 𝐒ᴀᴛʜ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  𝐁ᴀᴀᴘ 𝐀ᴜʀ  𝐈ɴᴅɪᴀ 𝐖ᴀʟᴇ 𝐁ʜɪ 𝐂ʜɪʟʟ 𝐊ᴀʀ 𝐑ʜᴇ ོ༘₊⁺🇮🇳 ₊⁺⋆.˚",
+            " ོ༘₊⁺🇯🇵 ₊⁺⋆.˚ 𝐓ᴇʀɪ 𝐌ᴀᴀ 𝐊ᴇ 𝐒ᴀᴛʜ   ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  𝐁ᴀᴀᴘ 𝐀ᴜʀ 𝐉ᴀᴘᴀɴ 𝐖ᴀʟᴇ 𝐁ʜɪ 𝐂ʜɪʟʟ 𝐊ᴀʀ 𝐑ʜᴇ ོ༘₊⁺🇯🇵 ₊⁺⋆. ",
+            " ₊⁺🇺🇸 ₊⁺⋆.˚ 𝐓ᴇʀɪ 𝐌ᴀᴀ 𝐊ᴇ 𝐒ᴀᴛʜ   ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  𝐁ᴀᴀᴘ 𝐀ᴜʀ 𝐔𝐒𝐀 𝐖ᴀʟᴇ 𝐁ʜɪ 𝐂ʜɪʟʟ 𝐊ᴀʀ 𝐑ʜᴇ ོ༘₊⁺🇺🇸 ₊⁺⋆.˚",
+            "𓂃˖˳·˖ ִֶָ ⋆🧡͙⋆ ִֶָ˖·˳˖𓂃 ִֶָ⁀➴༯ 𝐒𝐋𝐀𝐕𝐄 ִֶָ. ..𓂃 ࣪ ִֶָ🌈་༘࿐ 𝐓𝐌𝐊𝐂 -/- ⋆˚🧡 ݁˖⭑.ᐟ",
+            "𓂃˖˳·˖ ִֶָ ⋆💛͙⋆ ִֶָ˖·˳˖𓂃 ִֶָ⁀➴༯ 𝐒𝐋𝐀𝐕𝐄 ִֶָ. ..𓂃 ࣪ ִֶָ🌈་༘࿐ 𝐓𝐌𝐊𝐂 -/- ⋆˚💛 ݁˖⭑.ᐟ",
+            "𓂃˖˳·˖ ִֶָ ⋆💚͙⋆ ִֶָ˖·˳˖𓂃 ִֶָ⁀➴༯ 𝐒𝐋𝐀𝐕𝐄 ִֶָ. ..𓂃 ࣪ ִֶָ🌈་༘࿐ 𝐓𝐌𝐊𝐂 -/- ⋆˚💚 ݁˖⭑.ᐟ",
+            "𓂃˖˳·˖ ִֶָ ⋆💙͙⋆ ִֶָ˖·˳˖𓂃 ִֶָ⁀➴༯ 𝐒𝐋𝐀𝐕𝐄 ִֶָ. ..𓂃 ࣪ ִֶָ🌈་༘࿐ 𝐓𝐌𝐊𝐂 -/- ⋆˚💙 ݁˖⭑.ᐟ",
+        ]
+
+        # ─── FUN RAIDS TEXT LISTS (Menu8) ──────────────────────────────────────
+
         shayari_texts = [
-            "तेरी आँखों की गहराई में, मेरी दुनिया बसी है,\nहर सांस में तू बसी है, तू ही मेरी हँसी है। 💕",
-            "प्यार में क्या रखा है, ये तो हमें पता नहीं,\nबस तेरे बिना लगता है, जीना भी सज़ा नहीं। 💔",
-            "चाँद से खूबसूरत है तेरा चेहरा,\nतू है तो दुनिया लगती है मेरी। 🌙",
-            "तेरी यादों में खोया रहूँ,\nतू मिले तो ये जहाँ भूल जाऊँ। 💭",
-            "प्यार का हर लम्हा तेरे साथ जीया,\nतेरी बातों में खुद को खोया। 🥀",
-            "तेरे बिना ये दिल है बेक़रार,\nतू आए तो मिलेगा करार। ❤️",
-            "हर दिन तुझसे प्यार बढ़े,\nहर सांस तुझसे निभे। 💗",
-            "तेरी हँसी में जान है,\nतेरी बातों में पहचान है। 😊",
-            "तेरी बाहों में मिली राहत,\nतेरी आँखों में मिला सुकून। 🌹",
-            "तू है तो हर ग़म भूला,\nतू है तो ये दिल झूला। 🎠",
-            "हर रोज़ तुझसे प्यार हो,\nहर शाम तुझपे निसार हो। 🌅",
-            "तेरी मुस्कान है जादू,\nजो बिखेरे हर दिन बहार। 🌺",
-            "मैं तुझमें खो जाऊँ,\nतू मुझमें खो जाए,\nबस यही है प्यार की ख्वाहिश। 💞",
-            "तेरी आँखों की गहराई में,\nमेरी दुनिया बसी है। 🌌",
-            "तेरे बिना ये दिल है अकेला,\nतू आए तो मिले झूला। 🎵",
+            "तेरी आँखों में खोया रहूँ, तू मिले तो ये जहाँ भूल जाऊँ। 💕",
+            "प्यार में क्या रखा है, बस तेरे बिना लगता है जीना भी सज़ा नहीं। 💔",
+            "चाँद से खूबसूरत है तेरा चेहरा, तू है तो दुनिया लगती है मेरी। 🌙",
+            "तेरी यादों में खोया रहूँ, हर सांस में तू बसी है। 💭",
+            "हर दिन तुझसे प्यार बढ़े, हर सांस तुझसे निभे। 💗",
+            "तेरी हँसी में जान है, तेरी बातों में पहचान है। 😊",
+            "तेरी बाहों में मिली राहत, तेरी आँखों में मिला सुकून। 🌹",
+            "तू है तो हर ग़म भूला, तू है तो ये दिल झूला। 🎠",
+            "हर रोज़ तुझसे प्यार हो, हर शाम तुझपे निसार हो। 🌅",
+            "तेरी मुस्कान है जादू, जो बिखेरे हर दिन बहार। 🌺",
             "Your love is the poetry my heart always wanted to write. 📝💖",
             "In a world full of trends, I want to remain your timeless classic. 🌟",
             "You are the missing piece of my soul, the calm in my chaos. 🧩",
@@ -945,27 +1116,17 @@ async def run_user_bot(session_string, chat_id):
             "I didn't choose you, my heart did. And it doesn't know how to unchoose. ❤️‍🔥",
             "You are not just my love; you are my home. 🏠",
             "Your smile is the best part of my day, and your laugh is my favorite sound. 😄🎶",
-            "I could search my whole life, but I know I'd never find someone like you. 🔍✨",
-            "You are the answer to every question my heart never knew to ask. 🙋‍♀️💘",
-            "With you, every moment feels like a dream I never want to wake up from. 🌈",
             "You are my today and all of my tomorrows. 📅❤️",
-            "The best thing about me is you. 👫",
-            "If I had to choose between breathing and loving you, I would use my last breath to say I love you. 💀🗣️",
-            "Teri yaad aati hai, raat bhi jaag jaati hai,\nDil mein teri hi baatein, neend bhi bhag jaati hai. 💤💕",
-            "Pyaar mein kya rakha hai, mujhko nahi pata,\nPar tere bina toh lagta, zindagi hai saza. 😩❤️",
-            "Tu hai toh lagta hai, saara jahaan mera,\nTu nahi toh lagta, jaise koi khwab adhoora. 🌍💫",
-            "Meri har subah tu, meri har shaam tu,\nMeri har dua mein, bas tera hi naam tu. ☀️🌙",
-            "Tera smile dekh ke lagta hai, jaise mera wifi full signal pe aa gaya. 📶😄",
-            "Pyaar kya hai? Maine tujhse jaana,\nTera naam sunke hi dil ho jaata hai deewana. 🫀",
+            "Teri smile dekh ke lagta hai, jaise mera wifi full signal pe aa gaya. 📶😄",
+            "Pyaar kya hai? Maine tujhse jaana, tera naam sunke hi dil ho jaata hai deewana. 🫀",
             "Tu hai toh din hai, warna toh har pal hai night shift. 🌃",
-            "Dil ki baat kehni thi, bas yahi socha,\nTujhse milke samjha, pyaar kya hai bhai! 🥰",
-            "Teri ek smile pe, main de doon jaan bhi,\nPar tu maange toh, de doon duniya bhi. 😄🌎",
-            "Chand se chura ke laaya hoon, teri muskaan,\nRakh lo dil mein, yeh hai meri jaan. 🌙💖",
-            "Tere bina dil hai veeran, tu aaja ve,\nDil ki yeh raah, hai bas teri hi ore. 🛤️💔",
-            "Pyaar ka sabak mila, tujhse hi yaar,\nAb toh bas tera hi hai, yeh dil bekarar. 🫀",
-            "Kya baat hai tujh mein, hai koi jaadu,\nDekhta hi rahu, na ho mera wajood. 👀✨",
-            "Tu hi meri subah, tu hi mera sukoon,\nTere bina toh jaise, khaali hai yeh khwabon ka jahoon. ☁️",
-            "Kehte hain pyaar mein aankhen band hoti hain,\nPar tujh mein toh maine, duniya poori dekhi hai. 🌟"
+            "Dil ki baat kehni thi, bas yahi socha, tujhse milke samjha, pyaar kya hai bhai! 🥰",
+            "Teri ek smile pe, main de doon jaan bhi, par tu maange toh, de doon duniya bhi. 😄🌎",
+            "Chand se chura ke laaya hoon, teri muskaan, rakh lo dil mein, yeh hai meri jaan. 🌙💖",
+            "Tere bina dil hai veeran, tu aaja ve, dil ki yeh raah, hai bas teri hi ore. 🛤️💔",
+            "Pyaar ka sabak mila, tujhse hi yaar, ab toh bas tera hi hai, yeh dil bekarar. 🫀",
+            "Kya baat hai tujh mein, hai koi jaadu, dekhta hi rahu, na ho mera wajood. 👀✨",
+            "Tu hi meri subah, tu hi mera sukoon, tere bina toh jaise, khaali hai yeh khwabon ka jahoon. ☁️"
         ]
 
         rizz_texts = [
@@ -979,11 +1140,6 @@ async def run_user_bot(session_string, chat_id):
             "तुम मेरे सबसे पसंदीदा गाने की धुन हो। 🎶",
             "मैं तुम्हें चाँद से भी ऊपर रखता हूँ – क्योंकि तुम तो सूरज हो। ☀️",
             "तुम मेरी रूह की तसल्ली हो – बस साथ रहो। 🕊️",
-            "तुम्हें देखते ही मेरा दिल धड़कता है – क्या डॉक्टर के पास चलें? ❤️‍🔥",
-            "तुम मेरी दुनिया हो – और मैं तुम्हारा दीवाना। 😍",
-            "तुम्हारा नाम सुनते ही दिल करता है कुछ खास करूँ। 💥",
-            "तुम्हारी बातों में ऐसा क्या है, जो मुझे पागल कर देती है। 🌀",
-            "क्या तुम चॉकलेट हो? क्योंकि मैं तुम्हें हर वक़्त खाना चाहता हूँ। 🍫",
             "Are you a magician? Because whenever I look at you, everyone else disappears. 🎩✨",
             "Do you have a map? I keep getting lost in your eyes. 🗺️👀",
             "Is your name Google? Because you have everything I'm searching for. 🔍💕",
@@ -993,76 +1149,1146 @@ async def run_user_bot(session_string, chat_id):
             "Excuse me, but I think you dropped something – my jaw. 👇😮",
             "Are you Wi-Fi? Because I'm feeling a connection. 📶❤️",
             "If you were a vegetable, you'd be a cute-cumber! 🥒😉",
-            "Can I follow you home? Cause my parents always told me to follow my dreams. 🏠💭",
-            "Is your dad a baker? Because you're a cutie pie! 🥧😋",
             "You must be a 10 because you've got me feeling like a 1 with you. 1️⃣0️⃣",
-            "Roses are red, violets are blue, sugar is sweet, and so are you. 🌹💙",
-            "I must be a snowflake because I've fallen for you. ❄️💘",
-            "Are you a time traveler? Because I see you in my future. ⏳🔮",
-            "Tera naam kya hai? \nKyunki mera plan hai tera baap banana! 😎👀",
-            "Kya tum Google ho? \nKyunki mujhe tum mein woh sab milta hai jo main dhundh raha tha. 🔍💕",
-            "Tum toh mere WiFi jaisi ho, \nBina tumhare connection hi nahi aata. 📶😏",
-            "Kya tum chocolate ho? \nKyunki main toh din raat tumhe kha sakta hoon. 🍫😋",
-            "Tumhari smile dekh ke lagta hai, \nMera din set aur raat forget. 🌞",
-            "Main driver nahi hoon, \nPar tumhare dil ki steering le sakta hoon? 🚗💨",
-            "Kya tum Starbucks ho? \nKyunki main har din tumhara naam pukaarna chahta hoon. ☕😄",
-            "Mere papa ne mujhe sikhaya hai ki, \nAage badhna chahiye, toh kya main tumhara crush ban sakta hoon? 🏃💨",
-            "Tumhare numbers mujhe lottery lage, \nKyuki tum toh jackpot ho yaar! 🎰💰",
-            "Meri battery low hai, \nKya tum mere charger ban sakte ho? 🔋❤️",
-            "Kya tum doctor ho? \nKyunki mera dil dekh ke toh tumne dhadkana sikha diya. 👨‍⚕️💓",
-            "Tumhari height kya hai? \nKyunki lagta hai tum heaven se chhidi hui ho. 📏👼",
-            "Mere paas ek phone hai, \nPar main tumhe call nahi karta, kyuki tum meri screen pe ho. 📱✨",
-            "Kya tumhe raat mein chand dikhta hai? \nKyunki woh toh meri pocket mein hai, par tum toh ho sitaron se bhi upar. 🌙⭐",
-            "Main kal se gym jaana shuru kar raha hoon, \nTumhara naam uthane ke liye. 💪😂",
-            "Agar tum 'Sorry' bolti ho toh main maan jaunga, \nPar tum toh bolti hi 'I love you' ho. 😂❤️",
-            "Tumhari aankhon mein pyaar hai ya paani, \nMaine toh dooba marne ka plan banaya. 🏊💀",
-            "Kya tumhe pata hai kiski height 6 feet hai? \nMeri love story ka plot twist! 😏📏",
-            "Mera DNA toh tumse match karta hai, \nKyunki main toh tumhara hi bana hoon. 🧬😘",
-            "Tumse milke lagta hai jaise, \nSach mein pyaar hota hai, bas tumhara nahi milta. 😅🫠"
+            "Tera naam kya hai? Kyunki mera plan hai tera baap banana! 😎👀",
+            "Kya tum Google ho? Kyunki mujhe tum mein woh sab milta hai jo main dhundh raha tha. 🔍💕",
+            "Tum toh mere WiFi jaisi ho, bina tumhare connection hi nahi aata. 📶😏",
+            "Kya tum chocolate ho? Kyunki main toh din raat tumhe kha sakta hoon. 🍫😋",
+            "Tumhari smile dekh ke lagta hai, mera din set aur raat forget. 🌞",
+            "Main driver nahi hoon, par tumhare dil ki steering le sakta hoon? 🚗💨",
+            "Kya tum Starbucks ho? Kyunki main har din tumhara naam pukaarna chahta hoon. ☕😄",
+            "Meri battery low hai, kya tum mere charger ban sakte ho? 🔋❤️",
+            "Kya tum doctor ho? Kyunki mera dil dekh ke toh tumne dhadkana sikha diya. 👨‍⚕️💓",
+            "Tumhari height kya hai? Kyunki lagta hai tum heaven se chhidi hui ho. 📏👼"
         ]
 
-        BESTFRIEND_SHAYARI = [
-            "💖 *Dil ki baat kehni hai, sun lo meri jaan,*\n🌸 *Tum bin adhoori hai yeh dastaan.*\n💫 *Kya tum banogi/banoge meri/mera best friend?* 🤗",
-            "🌟 *Tum ho meri khushi ka raaz,*\n🌺 *Tum bin jeena hai aawaaz.*\n🤗 *Kya tum best friend banogi/banoge?*",
-            "🎈 *Zindagi mein tum aaye toh rang hai,*\n🌹 *Har pal tumse hi sang hai.*\n💕 *Best friend bano meri jaan?*",
-            "✨ *Tum ho meri kahani ka aakhri hissa,*\n📖 *Tum bin adhoora hai yeh kissa.*\n🤝 *Kya tum meri best friend banogi/banoge?*",
-            "🌸 *Phoolon ki tarah tum ho khilte,*\n🌼 *Tum bin dil hai kaise milte?*\n💖 *Best friend ka rishta nibhaoge?*",
-            "💫 *Tum ho meri life ka sundar sapna,*\n🌙 *Tum bin sab hai apna-apna.*\n🧸 *Kya tum best friend banogi/banoge?*",
-            "🌺 *Dosti ki raah mein tumse mila,*\n🌷 *Meri duniya tumse hi saja.*\n💕 *Best friend banoge meri jaan?*",
-            "💝 *Tum ho meri khushiyon ki wajah,*\n🎉 *Tum bin har din hai saza.*\n🤗 *Best friend kya tum banogi/banoge?*",
-            "🌟 *Tum ho meri roshni ka silsila,*\n🌙 *Tum bin sab hai bewajah.*\n💖 *Best friend bano na?*",
-            "🎀 *Tum se hai meri zindagi aasaan,*\n🌸 *Tum bin hai mushkil har armaan.*\n🤝 *Best friend banogi/banoge?*"
+        pickup_texts = [
+            "क्या तुम्हारा नाम Google है? क्योंकि तुममें वो सब है जो मैं ढूंढ रहा हूँ। 🔍",
+            "तुम्हारी आँखें तारे हैं और मैं उनमें खो जाना चाहता हूँ। ✨",
+            "क्या तुम WiFi हो? क्योंकि मुझे तुमसे कनेक्शन महसूस हो रहा है। 📶",
+            "तुम्हारी मुस्कान देखकर मेरा दिन बन जाता है। 😊",
+            "क्या तुम चॉकलेट हो? क्योंकि मैं तुम्हें हर वक़्त खाना चाहता हूँ। 🍫",
+            "तुम्हारे बिना मेरी ज़िंदगी अधूरी है। 💔",
+            "तुम मेरे सपनों की रानी हो। 👑",
+            "तुम्हारी बातें सुनकर दिल खुश हो जाता है। 💕",
+            "क्या तुम मेरे साथ चलोगी? 🚶‍♀️",
+            "तुम मेरी दुनिया हो। 🌍",
+            "Are you a time traveler? Because I see you in my future. ⏳",
+            "Is your name Angel? Because you fell from heaven. 👼",
+            "Do you have a Band-Aid? Because I just scraped my knee falling for you. 🩹",
+            "Are you a magician? Because whenever I look at you, everyone else disappears. 🎩",
+            "Can I follow you home? Because my parents always told me to follow my dreams. 🏠",
+            "Are you French? Because Eiffel for you. 🗼",
+            "Is your name Google? Because you have everything I'm searching for. 🔍",
+            "You must be a 10 because you've got me feeling like a 1 with you. 1️⃣0️⃣",
+            "Roses are red, violets are blue, sugar is sweet, and so are you. 🌹",
+            "I must be a snowflake because I've fallen for you. ❄️",
+            "Tum toh mere WiFi jaisi ho, bina tumhare connection hi nahi aata. 📶",
+            "Kya tum chocolate ho? Kyunki main toh din raat tumhe kha sakta hoon. 🍫",
+            "Tumhari smile dekh ke lagta hai, mera din set aur raat forget. 🌞",
+            "Meri battery low hai, kya tum mere charger ban sakte ho? 🔋",
+            "Kya tum doctor ho? Kyunki mera dil dekh ke toh tumne dhadkana sikha diya. 👨‍⚕️",
+            "Tumhari aankhon mein pyaar hai ya paani, maine toh dooba marne ka plan banaya. 🏊",
+            "Mera DNA toh tumse match karta hai, kyunki main toh tumhara hi bana hoon. 🧬",
+            "Tumse milke lagta hai jaise, sach mein pyaar hota hai. 😅",
+            "Tum toh mere sapno ki rani ho. 👑",
+            "Tumhari baatein sunke lagta hai, jaise koi khwab ho. 💭"
         ]
 
-        MARRIAGE_SHAYARI = [
-            "💍 *Chand sitare sab hai gawah,*\n🌹 *Tum bin jeena hai saza.*\n💕 *Kya tum mujhse shaadi karogi/karoge?*",
-            "💒 *Meri har dua mein tum ho shamil,*\n🌺 *Tum bin har khushi hai mushkil.*\n💞 *Shaadi karoge?*",
-            "🌸 *Pyaar ki raah mein tumse mila,*\n🌹 *Meri jaan ban gaye ho tum.*\n💍 *Shaadi ka vaada karo?*",
-            "💖 *Tum ho meri zindagi ka maqsad,*\n🌟 *Tum bin hai sab kuch bekaar.*\n🤵‍♀️🤵‍♂️ *Shaadi karogi/karoge?*",
-            "🎉 *Har lamha tumhare sang bitana hai,*\n🌙 *Tum bin jeena nahi, marna hai.*\n💏 *Shaadi ka irada hai kya?*",
-            "💕 *Tumse hai pyaar, yeh sach hai,*\n🌹 *Tum bin zindagi kuch nahi.*\n💍 *Shaadi karogi/karoge?*",
-            "🌹 *Tum ho meri subah ki pehli kiran,*\n🌙 *Tum bin meri raat hai viran.*\n💒 *Shaadi karte ho?*",
-            "💗 *Dil ki dhadkan tum hi ho,*\n🌟 *Tum bin sab kuch hai khamosh.*\n💍 *Shaadi ka waqt aa gaya?*",
-            "💖 *Pyaar ki gehraai mein tum ho,*\n🌊 *Tum bin meri manzil hai kho.*\n💏 *Shaadi karogi/karoge?*",
-            "💞 *Tumse hai mera har khwab,*\n🌙 *Tum bin meri zindagi hai azaab.*\n💍 *Shaadi ka irada hai?*"
+        romance_texts = [
+            "तेरी आँखों की गहराई में मेरी दुनिया बसी है। 💕",
+            "हर सांस में तू बसी है, तू ही मेरी हँसी है। 😊",
+            "चाँद से खूबसूरत है तेरा चेहरा। 🌙",
+            "तेरी यादों में खोया रहूँ। 💭",
+            "प्यार का हर लम्हा तेरे साथ जीया। 🥀",
+            "तेरे बिना ये दिल है बेक़रार। ❤️",
+            "हर दिन तुझसे प्यार बढ़े। 💗",
+            "तेरी हँसी में जान है। 😊",
+            "तेरी बाहों में मिली राहत। 🌹",
+            "तू है तो हर ग़म भूला। 🎠",
+            "You are the poetry my heart always wanted to write. 📝",
+            "In a world full of trends, I want to be your classic. 🌟",
+            "You are the missing piece of my soul. 🧩",
+            "Our love story is my favorite chapter. 📖",
+            "You are the sun in my day, the moon in my night. 🌞🌙",
+            "Falling in love with you was beyond my control. 💫",
+            "I didn't choose you, my heart did. ❤️‍🔥",
+            "You are not just my love; you are my home. 🏠",
+            "Your smile is the best part of my day. 😄",
+            "You are my today and all of my tomorrows. 📅",
+            "Teri smile dekh ke lagta hai, wifi full signal pe aa gaya. 📶",
+            "Pyaar kya hai? Maine tujhse jaana. 🫀",
+            "Tu hai toh din hai, warna toh har pal hai night shift. 🌃",
+            "Tujhse milke samjha, pyaar kya hai bhai! 🥰",
+            "Teri ek smile pe, de doon jaan bhi. 😄",
+            "Chand se chura ke laaya hoon, teri muskaan. 🌙",
+            "Tere bina dil hai veeran. 💔",
+            "Pyaar ka sabak mila, tujhse hi yaar. 🫀",
+            "Kya baat hai tujh mein, hai koi jaadu. 👀",
+            "Tu hi meri subah, tu hi mera sukoon. ☁️"
         ]
 
-        DIVORCE_SHAYARI = [
-            "💔 *Rishton ki dor hai kamzor,*\n🌪️ *Ab nahi sahega yeh dard-e-dil.*\n❓ *Kya tum talaq chahti ho/chahte ho?*",
-            "😢 *Pyaar tha, par ab hai doori,*\n💔 *Nahi rahi ab koi majboori.*\n📜 *Talaq de do?*",
-            "💔 *Toot gaye sapne saare,*\n🌧️ *Ab nahi rahe hum tumhaare.*\n❓ *Kya talaq chahiye?*",
-            "💔 *Ishq mein thi humko khushi,*\n😣 *Ab toh bas hai tanhai.*\n📄 *Talaq mangte ho?*",
-            "💔 *Vaade tod kar tumne,*\n😤 *Humse hai ab na koi rishta.*\n🗑️ *Talaq do?*",
-            "💔 *Zindagi mein ab nahi ho tum,*\n🌪️ *Mann mein bas gayi hai udaasi.*\n❌ *Talaq ki baat karoge?*",
-            "💔 *Pyaar ki kami hai, saath nahi,*\n😭 *Ab aur nahi yeh dard sahti.*\n📜 *Talaq de do?*",
-            "💔 *Apne the, par ab begane,*\n😤 *Kyun baandhein yeh rishte begaane.*\n❓ *Talaq le lo?*",
-            "💔 *Mann mein ab kuch nahi bas gaye,*\n🍂 *Rishton ke patte jhad gaye.*\n🗑️ *Talaq do?*",
-            "💔 *Tum bin hai jeena mushkil,*\n😣 *Par tum ho toh aur mushkil.*\n📄 *Talaq mangte ho?*"
+        troll_texts = [
+            "Bhai tujhe dekh ke lagta hai troll ka mascot tu hai 😂",
+            "Ter personality ek sada hua pyaz jaisi hai — khole toh aansu aaye 🧅",
+            "Tu itna bura lagta hai ke teri photo dekh ke mosquito bhi bhaag jata hai 🦟",
+            "Teri maa ne bhi socha hoga — yaar galti ho gayi 😹",
+            "Tujhe dekh ke pata chalta hai — darr darr ke jeena kya hota hai 😂",
+            "Teri iq level calculator mein error aata hai 🧮",
+            "Tu chhata hua papad hai — touch karte hi toot gaya 😹",
+            "Bhai teri aukat itni hai ke mirror bhi muh fer leta hai 🪞",
+            "Teri personality dekh ke AI bhi depressed ho gaya 🤖",
+            "Tu aisa dost hai jo aaye na aaye — fark nahi padta 😂",
+            "Your life is like a bad web series — flop in season 1 📺",
+            "Your personality is like a blank meme template — nothing 😂",
+            "You're so boring that even sleep runs away from you 😴",
+            "Your existence is proof that anyone can use the internet 📶",
+            "Your thinking is 2G speed in a 5G world 📡",
+            "Your life is a loading screen that never loads ⏳",
+            "You're the reason 'error' exists in the dictionary 📖",
+            "Your vibe check: FAILED 😂",
+            "You're irrelevant — even Google doesn't know you 🔍",
+            "You're a hero whose movie flopped in 3 minutes 🎬",
+            "Bhai tera swag Excel mein error hai — #NAME? 📊",
+            "Tu itna dheema hai ke kachhua bhi race jeet gaya 🐢",
+            "Teri thinking 2G speed pe chal rahi hai 📡",
+            "Beta tera ek message dekh ke aasman bhi sharma gaya ☁️",
+            "Bhai teri life ek loading screen hai — jo kabhi load nahi hoti ⏳",
+            "Ter maa ne tujhe chhoda nahi chhodni chahiye thi 😂",
+            "Beta tera existence proof hai ke koi bhi internet use kar sakta hai 📶",
+            "Bhai teri personality ek blank page hai — aur blank hi rahega 📄",
+            "Tu sirf chat mein hero hai real duniya mein zero 💻",
+            "Beta teri soch itni outdated hai ke floppy disk bhi reject kar de 💾"
+            "🤡 Bhai tujhe dekh ke lagta hai troll ka mascot tu hai 😂🔥",
+            "😹 Tu itna troll hai ke khud ko pata nahi 💀🤡",
+            "🤡 Teri baatein sun ke log seriously nahi lete — aur le bhi nahi chahiye 😂😹",
+            "😹 Beta tu internet ka troll #1 candidate hai 💀🤡",
+            "🤡 Tujhe real life mein bhi ignore karte honge log 😂🔥",
+            "😹 Bhai teri comments section mein sabne dislike diya 👎🤡",
+            "🤡 Tu troll karne ki koshish karta hai — khud troll bana rehta hai 😂💀",
+            "😹 Teri troll game weak hai — aur weak troll game bhi troll hai 🤡🔥",
+            "🤡 Beta jo tu sochta hai funny hai woh boring hai 😂😹",
+            "😹 Bhai tera troll skill level: tutorial mode pe stuck 🤡💀",
+            "🤡 Tu troll hai par original nahi — copy-paste troll 😂🔥",
+            "😹 Teri trolling se logon ko secondhand embarrassment hoti hai 🤡😂",
+            "🤡 Beta tujhe seriously lena — woh troll hoga apne aap pe 😹💀",
+            "😹 Bhai tera meme quality — delete worthy 🤡😂",
+            "🤡 Tu troll karta hai online — real duniya mein kaanta nahi milta 😹🔥",
+            "😹 Beta teri har post pe raat ko cry karta hai 🤡💀",
+            "🤡 Tujhe dekh ke pata chalta hai — internet access free nahi honi chahiye 😂😹",
+            "😹 Bhai teri troll attempt genuine cringe hai 🤡🔥",
+            "🤡 Tu troll ka wannabe version hai 😂💀",
+            "😹 Beta asli troll woh hota hai jise pata nahi woh troll hai — tu wahi hai 🤡😂",
+            "🤡 Bhai teri comments log copy karke dusron ko dikhate hain — example ke liye kya nahi karna chahiye 😹🔥",
+            "😹 Tu troll karta hai par khud hi jal jaata hai 🤡💀",
+            "🤡 Beta teri troll attempts fail hoti hain kyunki tujhe original hona chahiye 😂😹",
+            "😹 Bhai seriously — apni energy sahi jagah lagao 🤡🔥",
+            "🤡 Teri trolling mein timing nahi content nahi creativity nahi 😂💀",
+            "😹 Beta tu woh insaan hai jo khud ko troll king samjhta hai — aur paida hota hai troll ke neeche 🤡😂",
+            "🤡 Bhai tera troll fail isliye hota hai — genuine nahi hai 😹🔥",
+            "😹 Tu troll karta hai aur end mein rota hai — classic 🤡💀",
+            "🤡 Beta tujhe sun ke logon ko stress nahi hoti — pity hoti hai 😂😹",
+            "😹 Bhai teri troll quality inspect hua — returned as defective 🤡🔥",
+            "🤡 Tu original troll nahi — fan-made version hai 😂💀",
+            "😹 Beta teri trolling attempt mein best cheez — mujhe engage nahi karta 🤡😂",
+            "🤡 Bhai teri presence troll community ke liye embarrassment hai 😹🔥",
+            "😹 Tu troll karta hai aur log silent ho jaate hain — cringe se 🤡💀",
+            "🤡 Beta teri troll ka response — ignore — kyunki deserve nahi karta 😂😹",
+            "😹 Bhai tera troll skill tree mein sirf ek node hai — aur woh bhi locked hai 🤡🔥",
+            "🤡 Tu troll ka demo version hai — full version nahi aaya 😂💀",
+            "😹 Beta trolling seekh pehle phir aa — abhi tu syllabus mein nahi hai 🤡😂",
+            "🤡 Bhai teri baatein sun ke log empathy feel karte hain — tere liye 😹🔥",
+            "😹 Tu troll nahi — annoying hai — alag concept hai 🤡💀",
+            "🤡 Beta tera troll game 0/10 — ek baar apni chat history padh 😂😹",
+            "😹 Bhai tu sirf apna time barbad kar raha hai — mera nahi 🤡🔥",
+            "🤡 Teri troll attempt ek baar bhi hit nahi hui — streak: 0 😂💀",
+            "😹 Beta tera troll unprovoked aur uninspired tha 🤡😂",
+            "🤡 Bhai tu troll ke bhi standards neeche hai 😹🔥",
+            "😹 Teri trolling see aur feel karna — dono experience kharab hain 🤡💀",
+            "🤡 Beta teri troll ne sirf yeh prove kiya — tujhe better kaam dhundhna chahiye 😂😹",
+            "😹 Bhai troll mein skill hoti hai — teri mein nahi 🤡🔥",
+            "🤡 Tu troll hai aur tera troll bhi troll hai — recursion 😂💀",
+            "😹 Beta ek advice — yeh mat kar — seriously apni life mein focus kar 🤡😎",
+            "Tu itna bura lagta hai ke teri photo dekh ke mosquito bhi bhaag jata hai 🦟",
+            "Teri maa ne bhi socha hoga — yaar galti ho gayi 😹",
+            "Tujhe dekh ke pata chalta hai — darr darr ke jeena kya hota hai 😂",
+            "Teri iq level calculator mein error aata hai 🧮",
+            "Tu chhata hua papad hai — touch karte hi toot gaya 😹",
+            "Bhai teri aukat itni hai ke mirror bhi muh fer leta hai 🪞",
+            "Teri personality dekh ke AI bhi depressed ho gaya 🤖",
+            "Tu aisa dost hai jo aaye na aaye — fark nahi padta 😂",
+            "Your life is like a bad web series — flop in season 1 📺",
+            "Your personality is like a blank meme template — nothing 😂",
+            "You're so boring that even sleep runs away from you 😴",
+            "Your existence is proof that anyone can use the internet 📶",
+            "Your thinking is 2G speed in a 5G world 📡",
+            "Your life is a loading screen that never loads ⏳",
+            "You're the reason 'error' exists in the dictionary 📖",
+            "Your vibe check: FAILED 😂",
+            "You're irrelevant — even Google doesn't know you 🔍",
+            "You're a hero whose movie flopped in 3 minutes 🎬",
+            "Bhai tera swag Excel mein error hai — #NAME? 📊",
+            "Tu itna dheema hai ke kachhua bhi race jeet gaya 🐢",
+            "Teri thinking 2G speed pe chal rahi hai 📡",
+            "Beta tera ek message dekh ke aasman bhi sharma gaya ☁️",
+            "Bhai teri life ek loading screen hai — jo kabhi load nahi hoti ⏳",
+            "Ter maa ne tujhe chhoda nahi chhodni chahiye thi 😂",
+            "Beta tera existence proof hai ke koi bhi internet use kar sakta hai 📶",
+            "Bhai teri personality ek blank page hai — aur blank hi rahega 📄",
+            "Tu sirf chat mein hero hai real duniya mein zero 💻",
+            "Beta teri soch itni outdated hai ke floppy disk bhi reject kar de 💾"
         ]
 
-        # ─── DEATHGOD REPLY LIST (unique merge of reply_list and reply_texts) ───
-        deathgod_replies = list(set(reply_list + reply_texts))
-        random.shuffle(deathgod_replies)
+        ragebait_texts = [
+            "Bhai tera reaction dekh ke mujhe hasi aa rahi hai 😂",
+            "Tu itna triggered ho gaya, jaise meri baat teri maa ne sun li ho 😹",
+            "Rage bait pe itna emotional mat ho, beta 😂",
+            "Tu toh aisa gussa ho raha hai jaise teri team world cup haar gayi 🏏",
+            "Bhai shant ho ja, tera BP high ho jayega 😂",
+            "Teri gaali sun ke mujhe neend aa rahi hai 😴",
+            "Tu rage karta hai aur main popcorn kha raha hoon 🍿",
+            "Beta tu toh aisa hai jaise bina phone ke reh gaya ho 📱",
+            "Teri rage dekh ke lagta hai, teri gf ne break up kar diya 💔",
+            "Tu toh aisa hai jaise internet slow ho gaya ho 😂",
+            "Your rage is entertaining, please continue 😂",
+            "Getting triggered over this? That's cute 🥺",
+            "You're so angry, did someone steal your Wi-Fi? 📶",
+            "Rage bait level: professional 😂",
+            "Your anger is my daily dose of comedy 🤡",
+            "Calm down, it's just a message 📩",
+            "You're acting like I insulted your whole bloodline 😂",
+            "The rage is real, and it's hilarious 😭",
+            "You need a therapist for that anger issues 🧠",
+            "I love how easy it is to get you triggered 😈",
+            "Bhai tera reaction dekh ke mujhe hasi aa rahi hai 😂",
+            "Tu itna triggered ho gaya, jaise maine teri game delete kar di ho 🎮",
+            "Rage bait pe itna emotional mat ho, beta 😂",
+            "Tu toh aisa gussa ho raha hai jaise teri team haar gayi 🏏",
+            "Bhai shant ho ja, tera BP high ho jayega 😂",
+            "Teri gaali sun ke mujhe neend aa rahi hai 😴",
+            "Tu rage karta hai aur main popcorn kha raha hoon 🍿",
+            "Beta tu toh aisa hai jaise bina phone ke reh gaya ho 📱",
+            "Teri rage dekh ke lagta hai, teri gf ne break up kar diya 💔",
+            "Tu toh aisa hai jaise internet slow ho gaya ho 😂"
+        ]
+
+        roast_texts = [
+            "Ter life ek bakwas webseries ki tarah hai — 1 season mein flop 😂",
+            "Bhai teri personality ek sada hua pyaz jaisi hai 🧅",
+            "Tu itna bura lagta hai ke teri photo dekh ke mosquito bhi bhaag jata hai 🦟",
+            "Teri maa ne bhi socha hoga — yaar galti ho gayi 😹",
+            "Tujhe dekh ke pata chalta hai — darr darr ke jeena kya hota hai 😂",
+            "Teri iq level calculator mein error aata hai 🧮",
+            "Tu chhata hua papad hai — touch karte hi toot gaya 😹",
+            "Bhai teri aukat itni hai ke mirror bhi muh fer leta hai 🪞",
+            "Teri personality dekh ke AI bhi depressed ho gaya 🤖",
+            "Tu aisa dost hai jo aaye na aaye — fark nahi padta 😂",
+            "Your life is a joke, and not even a funny one 😂",
+            "You're so irrelevant, even your shadow leaves you 🏃",
+            "Ter life ek bakwas webseries ki tarah hai — 1 season mein flop 😂",
+            "Bhai teri personality ek sada hua pyaz jaisi hai 🧅",
+            "Tu itna bura lagta hai ke teri photo dekh ke mosquito bhi bhaag jata hai 🦟",
+            "Teri maa ne bhi socha hoga — yaar galti ho gayi 😹",
+            "Tujhe dekh ke pata chalta hai — darr darr ke jeena kya hota hai 😂",
+            "Teri iq level calculator mein error aata hai 🧮",
+            "Tu chhata hua papad hai — touch karte hi toot gaya 😹",
+            "Bhai teri aukat itni hai ke mirror bhi muh fer leta hai 🪞",
+            "Teri personality dekh ke AI bhi depressed ho gaya 🤖",
+            "Tu aisa dost hai jo aaye na aaye — fark nahi padta 😂",
+            "Your life is a joke, and not even a funny one 😂",
+            "You're so irrelevant, even your shadow leaves you 🏃",
+            "Your existence is a notification I always swipe away 📱",
+            "You're like a software update — always annoying and never useful 💻",
+            "Your brain is like a browser with 100 tabs open — all useless 🌐",
+            "You're the human equivalent of a loading screen ⏳",
+            "Your personality is like a broken pencil — pointless ✏️",
+            "You're not stupid, you just have bad luck thinking 🤔",
+            "You're the reason God created jokes 😂",
+            "Your life is a meme, and not a good one 🗿",
+            "Bhai teri zindagi ek bakwas webseries jaisi hai 📺",
+            "Teri personality ek sada hua pyaz jaisi hai — khole toh aansu aaye 🧅",
+            "Tu itna bura lagta hai ke teri photo dekh ke mosquito bhi bhaag jata hai 🦟",
+            "Teri maa ne bhi socha hoga — yaar galti ho gayi 😹",
+            "Tujhe dekh ke pata chalta hai — darr darr ke jeena kya hota hai 😂",
+            "Teri iq level calculator mein error aata hai 🧮",
+            "Tu chhata hua papad hai — touch karte hi toot gaya 😹",
+            "Bhai teri aukat itni hai ke mirror bhi muh fer leta hai 🪞",
+            "Teri personality dekh ke AI bhi depressed ho gaya 🤖",
+            "Tu aisa dost hai jo aaye na aaye — fark nahi padta 😂"
+            "🔥 Teri zindagi ek bakwas webseries ki tarah hai — 1 season mein flop 😂📺",
+            "🤣 Bhai teri personality ek sada hua pyaz jaisi hai — khole toh aansu aaye 🧅💀",
+            "😹 Tu itna bura lagta hai ke teri photo dekh ke mosquito bhi bhaag jata hai 🦟😂",
+            "🔥 Teri maa ne bhi socha hoga — yaar galti ho gayi 😹👶",
+            "🤣 Tujhe dekh ke pata chalta hai — darr darr ke jeena kya hota hai 😂💀",
+            "😹 Beta tu Google Maps pe search kare toh bhi worthless aayega 🗺️😈",
+            "🔥 Teri iq level negative hai — calculator mein error aata hai 🧮😂",
+            "🤣 Tu chhata hua papad hai — touch karte hi toot gaya 😹🔥",
+            "😹 Bhai teri aukat itni hai ke mirror bhi muh fer leta hai 🪞😂",
+            "🔥 Teri personality dekh ke AI bhi depressed ho gaya hoga 🤖😹",
+            "🤣 Tu aisa dost hai jo aaye na aaye — fark nahi padta 😂💀",
+            "😹 Bhai teri soch utni hi purani hai jitna tera Nokia phone 📱😂",
+            "🔥 Tera existence mere life mein irrelevant hai — bilkul sarkari kaam jaisa 📋😹",
+            "🤣 Tu itna boring hai ke neend khud aa jaaye tujhe dekh ke 😴😂",
+            "😹 Teri profile pic dekh ke emoji wale bhi sue kar sakte hain 😱🔥",
+            "🔥 Bhai tu aisa player hai jo kabhi goal nahi kar sakta apne hi team ke khilaf 😂⚽",
+            "🤣 Teri advice sunna waisa hai jaise sade kele se rasta poochna 🍌😹",
+            "😹 Tu garib nahi hai — but tujhe dekh ke gareebi ko takleef hoti hai 💰😂",
+            "🔥 Teri kismat itni kharab hai ke lottery ticket bhi teri traf nahi dekhti 🎫😹",
+            "🤣 Bhai tera sense of humor graveyard se udhaara liya hai kya 🪦😂",
+            "😹 Tu itna irrelevant hai ke khud Google bhi nahi jaanta tera naam 🔍🔥",
+            "🔥 Teri body language bolta hai — main hara hua insaan hoon 😂💀",
+            "🤣 Tu ek hi baar funny tha — jab tune mujhe seriously liya 😹⚡",
+            "😹 Bhai teri achievements list mein sirf ek cheez hai — exist karna 😂🔥",
+            "🔥 Tujhe dekh ke lagta hai — nature ne mistake ki thi 🌿😹",
+            "🤣 Teri skills dekh ke Thanos bhi bola hoga — yeh toh automatically wipe ho jaayega 💀😂",
+            "😹 Beta tera future itna dark hai ke sunglasses pehenne ki zaroorat nahi 🕶️🔥",
+            "🔥 Teri batting dekh ke khud pitch ne sorry bola 🏏😂",
+            "🤣 Bhai tu aisa idea hai jo meeting mein sab ignore karte hain 📊😹",
+            "😹 Teri zubaan aur dimag mein kabhi meetup nahi hota 🧠💬😂",
+            "🔥 Tu aisa hero hai jiska movie 3 minutes mein flop ho gayi 🎬😹",
+            "🤣 Teri gaali sunne ke baad dushmano ne mafi maang li 😂⚔️",
+            "😹 Bhai tera swag level Excel mein error hai — #NAME? 📊🔥",
+            "🔥 Tu itna dheema hai ke kachhua bhi race jeet gaya 🐢😂",
+            "🤣 Teri thinking 2G speed pe chal rahi hai duniya 5G mein hai 📡😹",
+            "😹 Beta tera ek message dekh ke aasman bhi sharma gaya ☁️😂",
+            "🔥 Bhai teri life ek loading screen hai — jo kabhi load nahi hoti ⏳😹",
+            "🤣 Tu aisa mirror hai jo galat reflection dikhata hai 🪞😂",
+            "😹 Teri maa ne tujhe chhoda nahi chhodni chahiye thi 😂🔥",
+            "🔥 Beta tera existence proof hai ke koi bhi internet use kar sakta hai 📶😹",
+            "🤣 Tujhe dekh ke lagta hai — maa baap ne education mein invest nahi kiya 📚😂",
+            "😹 Teri personality ek blank page hai — aur blank hi rahega 📄🔥",
+            "🔥 Tu sirf chat mein hero hai real duniya mein zero 💻😂",
+            "🤣 Bhai teri jawab dene ki speed se tortoise bhi impress nahi 🐢😹",
+            "😹 Teri soch itni outdated hai ke floppy disk bhi reject kar de 💾😂",
+            "🔥 Tu aisa WiFi password hai jo koi yaad nahi rakhta 🔑😹",
+            "🤣 Beta teri awaaz sunne ke baad mujhe silence zyada priceless laga 🤫😂",
+            "😹 Bhai tera roast karna waisa hai jaise sadi hui vegetable ko season karna 🥦🔥",
+            "🔥 Teri social skills dekh ke chatbot bhi impress ho ga
+            "Your existence is a notification I always swipe away 📱",
+            "You're like a software update — always annoying and never useful 💻",
+            "Your brain is like a browser with 100 tabs open — all useless 🌐",
+            "You're the human equivalent of a loading screen ⏳",
+            "Your personality is like a broken pencil — pointless ✏️",
+            "You're not stupid, you just have bad luck thinking 🤔",
+            "You're the reason God created jokes 😂",
+            "Your life is a meme, and not a good one 🗿",
+            "Bhai teri zindagi ek bakwas webseries jaisi hai 📺",
+            "Teri personality ek sada hua pyaz jaisi hai — khole toh aansu aaye 🧅",
+            "Tu itna bura lagta hai ke teri photo dekh ke mosquito bhi bhaag jata hai 🦟",
+            "Teri maa ne bhi socha hoga — yaar galti ho gayi 😹",
+            "Tujhe dekh ke pata chalta hai — darr darr ke jeena kya hota hai 😂",
+            "Teri iq level calculator mein error aata hai 🧮",
+            "Tu chhata hua papad hai — touch karte hi toot gaya 😹",
+            "Bhai teri aukat itni hai ke mirror bhi muh fer leta hai 🪞",
+            "Teri personality dekh ke AI bhi depressed ho gaya 🤖",
+            "Tu aisa dost hai jo aaye na aaye — fark nahi padta 😂"
+        ]
+
+        # ─── NON-ABUSIVE RAID TEXTS (Menu9) ────────────────────────────────────
+
+        attack_texts = [
+     "🗡️ Tera baap aaya hai sunta nahi kya 👑😈",
+        "⚡ Mere saamne aake dikhao himmat hai toh 😎💪",
+        "🔥 Attack mode on — teri khair nahi aaj 😡⚔️",
+        "💀 Tujhe itna marunga ke teri maa bhi nahi pehchanegi 😂🔥",
+        "💥 Beta ye territory meri hai nikal yahan se 🏴‍☠️⚡",
+        "🗡️ Aukaat hai toh saamne aa nahi toh chup baith 😈💀",
+        "⚡ Tu keyboard warrior hai asli mard nahi 😂👊",
+        "🔥 Teri maa ne bhi bola tera baap chahiye 😹💔",
+        "💥 Chal hat yahan se chota baccha 🤣👋",
+        "⚔️ Mujhe gaali de ke dekh kya hoga teri life mein 😈⚡",
+        "💀 Bhai seedha bol de surrender karega ya maar khayega 😎🔥",
+        "🗡️ Attack karta hoon toh block nahi hoga tera 😡⚔️",
+        "⚡ Yeh game mein nahi real life mein bhi kaatenge tujhe 💪😤",
+        "🔥 Tera confidence dekh ke hansi aati hai yaar 😂💥",
+        "💥 Andha hai ya dikhta nahi kaun boss hai yahan 👑⚔️",
+        "⚔️ Teri har gaali pe 10 gaaliyan waapis aayengi 😈🔥",
+        "💀 Beta peeth nahi dikhana mujhe — coward 🏃‍♂️😂",
+        "🗡️ Lad le ek baar — guarantee hai rota hoga tu 😹⚡",
+        "⚡ Keyboard tod ke aa toh baat karte hain 💥👊",
+        "🔥 Teri bhasha se pata chalta hai ghar mein parhe nahi 😂🤣",
+        "⚔️ Main yahan hoon — tu kahan chhupta hai aaja 😎💀",
+        "💀 Teri har move ka jawab taiyaar hai mere paas 🎯🔥",
+        "🗡️ Tu sirf darta hai asli attack nahi kar sakta 😂⚡",
+        "⚡ Baahubali nahi hai tu yahan — chal nikal 👋💥",
+        "🔥 Teri aukaat utni hai jitni do takke ki 😹🗡️",
+        "💥 Attack aur reaction — dono mein haar jayega tu ⚔️😎",
+        "⚔️ Ek baar aake dekh kya hota hai tere saath 💀🔥",
+        "💀 Sher ke saamne bakra nahi ban — phir bhi ban raha 😂⚡",
+        "🗡️ Yeh teri territory nahi bhai — haath jod ke ja 🙏😈",
+        "⚡ Tu attack karega aur main finish karunga 💥⚔️",
+        "🔥 Teri himmat hai toh mujhse seedha baat kar 😤💀",
+        "💥 Keyboard pe hero ban raha hai — asli duniya mein zero 😂🗡️",
+        "⚔️ Maar kha aur phir rota mat — warning hai 😈⚡",
+        "💀 Teri speed se faster hoon main — bhaag nahi sakta 🔥💥",
+        "🗡️ Yaar teri life mein koi nahi kya isliye yahan ata hai 😂⚔️",
+        "⚡ Hero mat ban — yahan real khiladi baithe hain 👑💀",
+        "🔥 Attack kiya — ab lash uthane ki taiyaari kar 😹⚡",
+        "⚔️ Teri har galti ka hisaab hoga — ruk 😈🔥",
+        "💀 Bhai attack se pehle 1% dimag use kar 🧠💥",
+        "🗡️ Chal hat nahi toh main khud hataunga isko 😤⚡",
+        "⚡ Yeh war hai — aur tu already haar gaya 😎🔥",
+        "🔥 Teri maa bhi tera lecture sunke bore ho gayi hogi 😹💥",
+        "💥 Main attack mein vishwas nahi karta — main finish mein karta hoon ⚔️😈",
+        "⚔️ Chal randike ek baar try kar le — rona mat baad mein 😂💀",
+        "💀 Ab samjha kya hua? No? Toh phir ek aur attack 🔥⚡","
+        ]
+
+        war_texts = [
+            "⚔️ War shuru ho gayi — aur tu pehle hi haar gaya 😂🔥",
+        "💣 Bhai main war mein nahi aata — main war khatam karne aata hoon 😈⚡",
+        "🏴‍☠️ Tera jhanda uraya — apna wala lehraya 😎💀",
+        "⚔️ Tu lad raha hai mujhse — yeh teri sabse badi galti hai 🔥😂",
+        "💣 Main war nahi khelta — main result deliver karta hoon 👑⚡",
+        "🏴‍☠️ Battlefield pe aake to dekh — tera rank kya hai 😈⚔️",
+        "⚔️ Randike war declare kiya toh surrender ka option bhi rakh 😂💣",
+        "💣 Tu soldier nahi hai — tu sirf noise hai 🔊😂",
+        "🏴‍☠️ War mein strategy chahiye — tu sirf emotion se ladhta hai 😹⚔️",
+        "⚔️ Beta yeh teri territory nahi — nikalja 👋💣",
+        "💣 Tera war cry sunke mujhe neend aati hai 😴😂",
+        "🏴‍☠️ Main akela kaafi hoon — teri poori army ke liye ⚔️😈",
+        "⚔️ War ghoshit kiya — white flag kahan hai tera 🏳️😂",
+        "💣 Bhai tu pehle khud ko toh jeet — phir mujhse lad 😎💀",
+        "🏴‍☠️ Tera war tactic: bolna aur bhaagna 😹⚔️",
+        "⚔️ Main chhoda nahi — tu chhoda baad mein roega 😂💣",
+        "💣 Battle field pe aate waqt socha — main jeet sakta hoon? Nahi 😈🏴‍☠️",
+        "⚔️ Tu ek round bhi nahi jeeta — aur war ki baat karta hai 😂💀",
+        "💣 Bhai surrender kar le — dignity bachegi thodi 🙏😹",
+        "🏴‍☠️ War mein aaye — aur pehli line mein fail ho gaye ⚔️😂",
+        "⚔️ Tera morale zero hai — teri army teri khud ki dushman hai 😂💣",
+        "💣 Main war expert hoon — tu war ka victim hai 😎🏴‍☠️",
+        "🏴‍☠️ Beta teri strategy ek broken compass jaisi hai ⚔️😂",
+        "⚔️ War mein seena taan ke aa — peeth dikha ke nahi 😹💣",
+        "💣 Bhai teri army mein sirf tu hai — aur tu kaafi nahi 😈🏴‍☠️",
+        "🏴‍☠️ Teri war cry sun ke dushman khud aa gaye — rescue karne ⚔️😂",
+        "⚔️ Beta teri territory war se pehle hi haari thi 💣😹",
+        "💣 Main war mein nahi — main tujhe personally destroy karne mein hoon 😈🏴‍☠️",
+        "🏴‍☠️ Tera war plan sunke GPS bhi confused hai ⚔️😂",
+        "⚔️ Tu war mein aaya — par weapons lana bhool gaya 💣😹",
+        "💣 Bhai yeh war nahi tujhe sirf reality check tha 😂🏴‍☠️",
+        "🏴‍☠️ Teri army tujhse zyada samajhdaar hai — unhone bandh kiya ⚔️😈",
+        "⚔️ War mein bhi excuse karta hai — aur life mein bhi 😂💣",
+        "💣 Tu jo war soch raha hai — woh meri morning routine hai 😎🏴‍☠️",
+        "🏴‍☠️ Bhai teri war itni slow hai ke climate change pehle ho jaayega ⚔️😹",
+        "⚔️ Main tujhse war karta hoon — aur tujhe pata bhi nahi chalta 💣😂",
+        "💣 War ghoshit kar ke tu pehla tha — haar ke bhi pehla hai 😹🏴‍☠️",
+        "🏴‍☠️ Teri war mein consistency hai — consistently losing ⚔️😂",
+        "⚔️ Bhai war mein bhagna galat hai — tu phir bhi karta hai 💣😈",
+        "💣 Tu war mein aaya — main pehle se tere base par tha 🏴‍☠️😂",
+        "🏴‍☠️ Teri war strategy mein sirf ek problem hai — sab kuch ⚔️😹",
+        "⚔️ Beta war ka matalab samjha nahi tujhe — sikhaunga abhi 💣😂",
+        "💣 War mein hero nahi bante — survivors bante hain — aur tu nahi banega 🏴‍☠️😈",
+        "🏴‍☠️ Teri war mein dum nahi — sirf dhool hai ⚔️😂",
+        "⚔️ Bhai war declare karna alag baat hai — jeetan alag 💣😹",
+        "💣 Tu war mein aaya sirf lose karne ke liye — congratulations 🏴‍☠️😂",
+        "🏴‍☠️ Main akele teri sab pe bhaari hoon — aur tujhe pata hai ⚔️😈",
+        "⚔️ Teri war ka sabse bura part — tu khud tha 💣😂",
+        "💣 War mein aaye — teri team ne hi tujhe chhod diya 🏴‍☠️😹",
+        "🏴‍☠️ Beta war khatam — teri taraf se surrender accepted ⚔️😎",
+        ]
+
+        savage_texts = [
+            "😈 Confidence is silent, insecurity is loud! 🔥",
+            "💀 You're not as important as you think! 🌪️",
+            "🔥 Reality check — you're not that special! 💥",
+            "😏 Your opinion is noted, but not needed! 📝",
+            "💀 Let's be honest — you're overrated! 🎭",
+            "🔥 The truth hurts, but it sets you free! 💪",
+            "😈 You're not the main character, sorry! 📺",
+            "💀 Your ego is writing checks your skills can't cash! 💰",
+            "🔥 Stay humble or get humbled! ⚡",
+            "😏 You're a classic example of overconfidence! 🎯",
+            "💀 Let your actions speak, not your mouth! 🔥",
+            "😈 Your presence is as useful as a screen door on a submarine! 🚪",
+            "🔥 Let's be real — you're not that impressive! 💥",
+            "💀 You're the CEO of overestimating yourself! 🏢",
+            "😏 Stay in your lane, champ! 🏎️",
+            "🔥 You're not as hot as you think! ❄️",
+            "💀 Confidence without skill is just delusion! 🎭",
+            "😈 Your reputation precedes you — and it's not good! 📉",
+            "🔥 Let's keep it real — you're average at best! ⭐",
+            "💀 You're a cautionary tale for others! ⚠️"
+            "😈 Main savage hoon — tujhe explanation nahi deta 🔥💀",
+            "💀 Teri feelings mere liye statistics hain — irrelevant 😂😈",
+            "🔥 Main woh nahi hoon jo tujhe comfortable feel karaaye 😎💀",
+            "😈 Beta teri baatein mujhe bore karti hain — next 😂🔥",
+            "💀 Teri opinion meri life mein footnote bhi nahi hai 😈😹",
+            "🔥 Main tujhe explain nahi karta — tujhse better logon ke paas time deta hoon 😎💀",
+            "😈 Tera attitude dekh ke mujhe apni nails file karni chahiye 💅😂",
+            "💀 Bhai tujhe reject karna meri hobby hai 🔥😈",
+            "🔥 Teri presence mujhe remind karaati hai — kuch logon ko mute karna chahiye 🔇😂",
+            "😈 Main bad vibes nahi leta — teri taraf bhi nahi 💀🔥",
+            "💀 Tu mere standard se neeche hai — elevator laga le 🛗😂",
+            "🔥 Teri baat sunna — option nahi habit nahi aur interest bhi nahi 😈💀",
+            "😈 Main ghanta samjhata hoon — samajh nahi aaya toh teri problem 😂🔥",
+            "💀 Teri ego itni badi hai — uske liye alag zip code chahiye 📮😂",
+            "🔥 Beta mujhe tujhse jealousy feel nahi hoti — pity hoti hai 😈💀",
+            "😈 Main woh insaan nahi hoon jis par tu waqt barbad kare — ya main karta hoon 😂🔥",
+            "💀 Teri life choices dekh ke main grateful hoon main tujhsa nahi hoon 😹😈",
+            "🔥 Bhai teri smartness ka level: WiFi password ignore karna 📶😂",
+            "😈 Teri mastiyan mujhe entertain nahi karti — bore karti hain 💀🔥",
+            "💀 Main savage nahi — main simply tujhse better hoon 😎😂",
+            "🔥 Teri personality ek blank meme format jaisi hai — kuch nahi 😈💀",
+            "😈 Beta apni journey pe focus kar — meri disturb mat kar 😂🔥",
+            "💀 Teri hard work ka result tera hi face hai — kaafi bura 😹😈",
+            "🔥 Main tujhe miss nahi karta — mujhe tujhse better cheezein miss hoti hain 😂💀",
+            "😈 Teri baatein sun ke laga — yeh real person hai ya chatbot glitch 🤖😂",
+            "💀 Bhai teri intelligence ke liye sorry feel hoti hai 🔥😈",
+            "🔥 Main tujhe block isliye nahi karta — kyunki tujhe exist karna pata hai 😂💀",
+            "😈 Teri struggles dekh ke mujhe motivation milti hai — teri tarah mat banna 😹🔥",
+            "💀 Tu jo effort lagate ho mujhpe — woh apni growth mein lagao 😎😂",
+            "🔥 Teri vibes mujhe 2G network se bhi slow lagti hain 📡😈",
+            "😈 Main tujhe pehle judge nahi karta — par tujhe pehle judge hota hoon 💀😂",
+            "💀 Bhai tera shadow bhi tujhse zyada interesting hai 🔥😂",
+            "🔥 Teri logic sun ke Albert Einstein ne resign kar diya hoga 🧪😈",
+            "😈 Tu mere jaisa ban sakta hai — agar try karta 10 saal toh bhi nahi 💀😂",
+            "💀 Teri taraf se koi bhi reaction — mujhe bored karta hai 🔥😹",
+            "🔥 Main respectful hoon — tere sath nahi 😈💀",
+            "😈 Beta teri vibe check: FAILED 😂🔥",
+            "💀 Teri har move predicted thi — boring player 😹😈",
+            "🔥 Main tujhe second chance nahi deta — teri pehli impression kafi thi 😂💀",
+            "😈 Teri friendship ke offer ko professionally decline karta hoon 😎😂",
+            "💀 Beta tu mujhe feel nahi karaata — tu sirf annoy karta hai 🔥😈",
+            "🔥 Teri dimagi capacity dekh ke solar calculator bhi sorry bol de 🔋😂",
+            "😈 Main uun logon mein nahi hoon jo tere liye time waste karein 💀🔥",
+            "💀 Teri life ka GPS tujhe wrong direction mein le ja raha hai 🗺️😂",
+            "🔥 Bhai teri alag identity bana — copier mat ban 😈💀",
+            "😈 Tu mere radar par bhi nahi aata — itna irrelevant hai 😂🔥",
+            "💀 Teri maa ne bhi socha hoga — yaar isko kuch aur karna chahiye tha 😹😈",
+            "🔥 Main woh hoon jo teri nightmares mein aata hai — as a reminder 😎💀",
+            "😈 Beta teri bakaiti mujhe filter nahi karti — automatically skip ho jaati hai 😂🔥",
+            "💀 Tu savage hone ki koshish karta hai — mujhe dekh savage ka example 😈😹",
+        ]
+
+        ultra_texts = [
+           "🔥 ULTRA mode activated — time to dominate! 👑"   
+        "🌪️ ULTRA MODE ACTIVATED — teri poori existence question mein hai 😈🔥",
+        "⚡ Ultra attack — pehle gaali sunna phir rona — sequence yaad kar 😂💀",
+        "🌪️ Beta ultra level pe aake dekh — yahan teri category nahi hai 👑🔥",
+        "⚡ ULTRA BLOW — teri soch se lekar attitude tak sab destroy 💥😈",
+        "🌪️ Yeh ultra mode hai — blocking nahi help karega 😂⚡",
+        "⚡ Ultra raid engaged — ab teri poori chat history history hai 📜😹",
+        "🌪️ Beta ultra speed mein aa — par seedha home le jaata hoon 💀🔥",
+        "⚡ Ultra fire — teri har defensive move kaam nahi karegi 😈🌪️",
+        "🌪️ Yeh ultra level fight hai — tu still bronze mein hai 😂⚡",
+        "⚡ ULTRA DAMAGE — teri reputation, teri aukaat, teri everything 💥😹",
+        "🌪️ Ultra mode mein poori teri army bhi kaafi nahi 😈🔥",
+        "⚡ Beta ultra attack sunne ke baad sun raha hai kya? Normal hai 😂🌪️",
+        "🌪️ ULTRA RANT incoming — tune jo kiya uska hisaab hoga 💀⚡",
+        "⚡ Yeh ultra version hai — tujhe pata bhi nahi kya aaya 😹🔥",
+        "🌪️ Ultra mode ON — timer chal raha hai teri destruction ka 😈⚡",
+        "⚡ Beta ultra strike pe tujhe sirf ek option hai — disappear 😂💀",
+        "🌪️ ULTRA COMBO — reply + react + roast + raid all at once 🔥⚡",
+        "⚡ Yeh ultra level rage hai — aur tujhe taste hoga 😈🌪️",
+        "🌪️ Ultra activated — pehle bol sorry phir ja 😹😂",
+        "⚡ Beta ULTRA message ka matlab — tu mere liye mission ban gaya 💀🔥",
+        "🌪️ ULTRA STORM — har cheez destroy ho rahi hai teri side pe 😈⚡",
+        "⚡ Yeh ultra nahi — tujhe sirf samjhane ki koshish thi 😂🌪️",
+        "🌪️ Ultra mode finish — teri team ne tera saath chhoda 💀🔥",
+        "⚡ Beta ULTRA = mera minimum effort on you 😈😂",
+        "🌪️ ULTRA RAIN — tune invite kiya tha — enjoy karna tha na? 😹⚡",
+        "⚡ Ultra mode mein ek hi rule — no mercy 💀🔥",
+        "🌪️ Beta ULTRA sabse pehle yeh — teri galti ka hisaab 😈⚡",
+        "⚡ Yeh ultra speed se aaya — aur teri samajh mein ultra slow aayega 😹🌪️",
+        "🌪️ ULTRA LOCK — ab yahan se nahi jayega tu 💀🔥",
+        "⚡ Beta ultra strike mein teri saari strategy fail hai 😂😈",
+        "🌪️ Ultra level pe chal — toh teri duniya hi badal jaayegi 🔥⚡",
+        "⚡ ULTRA — yeh word hi teri aukat se bada hai 😹💀",
+        "🌪️ Beta ultra mein main hoon — tujhe pata nahi tha kya 😈🔥",
+        "⚡ Yeh ultra raid hai — har message teri ek problem hai 😂🌪️",
+        "🌪️ ULTRA DONE — tu done kar le pehle 💀⚡",
+        "⚡ Beta ultra mein welcome — pehle bol kya karna hai 😹🔥",
+        "🌪️ Ultra mode — ab seedha point pe aata hoon — tu fail hai 😂😈",
+        "⚡ ULTRA BLAST — teri timeline pe aaya — nahi ruk sakta 💥🌪️",
+        "🌪️ Beta ultra mein aake teri baat karo — nahi aata toh seedha ja 💀🔥",
+        "⚡ Yeh ultra war hai — aur teri taraf se koi nahi 😂😈",
+        "🌪️ ULTRA FINAL — bas yahi hoga — accept kar 💀⚡",
+        "⚡ Beta ultra strike complete — check teri status 😹🔥",
+        "🌪️ Ultra mode mein log surrender karte hain — tujhe bhi karna hoga 😈⚡",
+        "⚡ Yeh ultra punishment nahi — tutorial hai teri life ka 😂💀",
+        "🌪️ ULTRA JUDGEMENT — teri har move judged ho rahi hai 🔥⚡",
+        "⚡ Beta ultra mein ek cheez — main hoon aur tu nahi rahe 😈🌪️",
+        "🌪️ Ultra mode completed — teri side destroyed 💀😂",
+        "⚡ Yeh ultra attack ka last wave hai — teri koi repair nahi 😹🔥",
+        "🌪️ ULTRA END — teri war khatam teri taraf se flag gira 😈⚡",
+        "⚡ Beta ultra mein aana tha — rona nahi tha — par dono kiye 😂💀",
+        ]
+
+        # ─── NEW MENU9 RAID TEXTS ───────────────────────────────────────────────
+
+        shame_texts = [
+        "😤 Sharam kar — itna gira hua kaam karte kaise hain tum log 🔥💀",
+        "🙅 Bhai teri harkat dekh ke pura group sharam se doob gaya 😂😤",
+        "😤 Yeh sab karke tujhe pride feel hoti hai? Really? 💀🔥",
+        "🙅 Beta teri harkaten dekh ke maa baap sharmayenge 😂😤",
+        "😤 Sharam nahi hai tujhe bilkul — clearly 💀😹",
+        "🙅 Bhai itna gira hua kaam dekh ke log muh fer lete hain 😤🔥",
+        "😤 Tu itna neeche gira — zameen bhi neeche ho gayi 💀😂",
+        "🙅 Beta sharam bhi nahi aata aisa karte hue 😤😹",
+        "😤 Yeh harkat dekh ke lagta hai — tujhe value kisi ne nahi sikhaya 💀🔥",
+        "🙅 Bhai log tujhe dekh ke aankhein pher lete hain — soch kya kar raha hai 😤😂",
+        "😤 Teri galti nahi — environment ki galti — par ab waqt hai change ka 💀😹",
+        "🙅 Beta sharam isliye nahi aati kyunki sharam feel karna seekha nahi 😤🔥",
+        "😤 Yeh kaam karke tujhe khushi mili? Toh mujhe tujhse zyada chinta hai 💀😂",
+        "🙅 Bhai teri harkat pura record hai — aur yeh record kharab hai 😤😹",
+        "😤 Tu sochta hai koi dekh nahi raha — sab dekh rahe hain 💀🔥",
+        "🙅 Beta aisa behave karta hai — khud se bhi embarrassing lagta hai tu 😤😂",
+        "😤 Yeh sab dekh ke lagta hai — teri parwarish kahan gayi 💀😹",
+        "🙅 Bhai teri harkaton ka hisaab hoga — aaj nahi toh kal 😤🔥",
+        "😤 Tu sharminda nahi hai — woh most shameful cheez hai 💀😂",
+        "🙅 Beta logo ne tujhe judge kiya — kyunki tune judge hone wala kaam kiya 😤😹",
+        "😤 Yeh bura kaam karke tujhe kya mila — kuch nahi — bas naam barbad 💀🔥",
+        "🙅 Bhai sharam karo — itna toh haq hai tumhara 😤😂",
+        "😤 Tu yahan cool lagne ki koshish mein sharminda ho gaya 💀😹",
+        "🙅 Beta ghalat rasta chhod — vapas aa 😤🔥",
+        "😤 Yeh sab karke teri image bani hai — worst category mein 💀😂",
+        "🙅 Bhai teri harkat ka review — 0 stars — do not recommend 😤😹",
+        "😤 Tu itna neeche gira — recovery mushkil lagti hai 💀🔥",
+        "🙅 Beta tujhe samjhana waqt waste hai — par try kar raha hoon 😤😂",
+        "😤 Yeh sab dekh ke mujhe tujhse zyada tujhpe gussa nahi — hairaani hai 💀😹",
+        "🙅 Bhai sharam se doob — par us mein bhi tujhe help chahiye shayad 😤🔥",
+        "😤 Teri harkat ek lesson hai — dusron ke liye kya nahi karna chahiye 💀😂",
+        "🙅 Beta teri yeh sab dekh ke khud bhi tujhse door rehna chahta hoon 😤😹",
+        "😤 Yeh gaaliyaan nahi — sirf reality check hai 💀🔥",
+        "🙅 Bhai sharam tab aati hai jab insaan mein insaniyat hoti hai 😤😂",
+        "😤 Tu ek example bana diya khud ko — negative example 💀😹",
+        "🙅 Beta tujhe ek baar ruk ke soochna chahiye tha — nahi soocha 😤🔥",
+        "😤 Yeh sab karke tu yahan hai — aur sochta hai main galat hoon? 💀😂",
+        "🙅 Bhai itna toh bata — tujhe kaisa feel hota hai yeh sab karne ke baad 😤😹",
+        "😤 Tu sharminda nahi — tujhe sharminda feel karna chahiye 💀🔥",
+        "🙅 Beta yeh rasta galat hai — abhi bhi change ho sakta hai 😤😂",
+        "😤 Yeh sab khud se bura nahi tha — tu tha 💀😹",
+        "🙅 Bhai teri harkaton ka real world impact sun — sab tujhse dur hain 😤🔥",
+        "😤 Tu soch raha hai main overreact kar raha hoon — par tujhe hisaab hoga 💀😂",
+        "🙅 Beta tujhe pata hai tu kya kar raha hai — aur phir bhi kar raha hai 😤😹",
+        "😤 Yeh sharm ki baat hai — aur tujhe realize karna chahiye 💀🔥",
+        "🙅 Bhai tujhe mirror mein dekhna chahiye — ek baar 😤😂",
+        "😤 Tu itna bura nahi hai — par yeh kaam bura tha 💀😹",
+        "🙅 Beta sharam isliye nahi aati — kyunki tu sochta nahi consequences ke baare mein 😤🔥",
+        "😤 Yeh moment tera lowest point hai — aur abhi bhi jaag sakta hai 💀😂",
+        "🙅 Bhai aaj ek kaam kar — sharminda ho aur badal — bas itna chahiye 😤😎",
+        ]
+
+        diss_texts = [
+            "🎤 Tera naam sun ke log mute kar dete hain khud ko 🔇😂",
+        "💀 Tu diss kar raha hai — khud ko diss kar pehle 🪞😹",
+        "🎙️ Teri rap jaisi hai — no flow no bars no future 🎵😂",
+        "💥 Bhai tera verse sun ke Eminem ne retire le liya 😹🎤",
+        "🔥 Teri diss itni kamzor hai ke whisper bhi zyada loud hai 🤫😂",
+        "💀 Tu sirf bolne mein mard hai karne mein? Zero 😈🎙️",
+        "🎤 Beta teri bars mein bar hi nahi — sirf khali string 🎸😂",
+        "💥 Tera diss track sunne ke baad logon ne earbuds tod diye 🎧😹",
+        "🔥 Bhai teri lyric likh ke dekha — autocorrect ne bhi reject kiya ✍️😂",
+        "💀 Tu diss karta hai aur log diss ko diss karte hain 😂🎤",
+        "🎙️ Teri voice aisi hai ke autotune bhi nahi bach sakta 🎶😹",
+        "💥 Beta freestyle kar le — ya phir stop the embarrassment 🛑😂",
+        "🔥 Tujhe sun ke DJ ne plug nikal diya 🔌😹",
+        "💀 Bhai tera flow aisa hai jaise jaam mein traffic — ruka hua 🚗😂",
+        "🎤 Teri soch itni slow hai ke beat ke saath nahi chalti 🥁😹",
+        "💥 Tera diss mujhe sula raha hai — better than sleeping pills 😴😂",
+        "🔥 Bhai asli diss toh tab hogi jab tu actually kuch achieve kare 🏆😹",
+        "💀 Teri lyrics Google Translate se better hain — bas 🌐😂",
+        "🎙️ Beta chal hat stage se — pehle walk-on music bana 🎵😹",
+        "💥 Tera punchline itna weak hai ke paper bhi survive kar le 📄😂",
+        "🔥 Bhai teri diss sun ke crowd ne baat karna shuru kar diya 🙄😹",
+        "💀 Tu verse likhta hai ya grocery list — same energy 🛒😂",
+        "🎤 Teri bars mein calories zyada hain — totally empty 😹🔥",
+        "💥 Bhai teri rhyme sunke chhote bacche bhi sharma jaate hain 😂💀",
+        "🔥 Teri diss aisi hai — sirf uski maa samjhi 😹🎙️",
+        "💀 Tu diss karta hai mujhe — main khud apni diss sunta hoon for fun 😂💥",
+        "🎤 Tera stage naam kya hai — Bakwas ke Raja? 👑😹",
+        "💥 Bhai teri microphone bhi teri awaaz se dara hua hai 🎙️😂",
+        "🔥 Tu diss mein expert hai — aur expert hone mein loser 😹💀",
+        "💀 Teri har line mein cringe hai — Olympic level 🥇😂",
+        "🎙️ Beta khud ki diss sun le — ek baar realise hoga 😹🔥",
+        "💥 Bhai tera diss itna slow hai ke mujhe neend aa gayi 😴😂",
+        "🔥 Teri creativity level: template pe naam likhna 💀😹",
+        "💀 Tu diss karne ke liye paida hua tha — aur fail ho gaya 😂🎤",
+        "🎙️ Tera rhyme scheme: aab aab aab — boring AF 📝😹",
+        "💥 Bhai teri diss response mein Soulja Boy beat use karta hun 😂🔥",
+        "🔥 Tu keyboard pe rap karta hai — phone pe nahi kaata 📱💀",
+        "💀 Teri diss sun ke mic khud neeche gir gaya 🎙️😂",
+        "🎤 Beta teri bars itni weak hain ke paper toh chodh kaagaz bhi nahi chhapega 📰😹",
+        "💥 Bhai tera flow paani mein nahi petrol mein hai — ab blast 🔥😂",
+        "🔥 Teri diss sunta hoon toh lagta hai sabne kaan band kar rakhe hain 🔇💀",
+        "💀 Tu diss mein ghusaa — tu diss tha diss 😹😂",
+        "🎙️ Bhai tera verse industry standard se neeche hai — ground floor bhi nahi 🏚️🔥",
+        "💥 Teri awaaz mein woh baat nahi jo diss mein chahiye — talent 😂💀",
+        "🔥 Beta teri diss itni pathetic hai ke pity vote mil sakta tha 🗳️😹",
+        "💀 Bhai teri rap career ek Instagram story jaisi hai — 24 ghante mein khatam 📸😂",
+        "🎤 Tu rapper nahi rapper ki copy ki copy ka knock-off hai 😹🔥",
+        "💥 Teri diss sun ke auto-generated ho sakti thi — aur better hoti 🤖😂",
+        "🔥 Bhai freestyle maar — aur phir sun khud ko — tujhe pata chalega 🎧💀",
+        "💀 Teri diss ka reply nahi deta — tujhe dignify karna time waste hai 😂🎙️",
+        ]
+
+        devil_texts = [
+            "😈 DEVIL MODE — yahan woh aaya hai jo tujhe deserve karta hai 🔥💀",
+        "😈 Beta main devil nahi — main tera worst nightmare hoon 🔥⚡",
+        "😈 Devil raid activate — teri poori timeline disturbed 💀😂",
+        "😈 Bhai devil pe hath lagaya — ab bhog 🔥💥",
+        "😈 DEVIL FURY — teri sab cheez ek baar mein 💀⚡",
+        "😈 Beta devil ke saamne hum sab khiladi hain — tu beginner 🔥😂",
+        "😈 DEVIL ATTACK — teri defense devil ke touch se fail 💀😈",
+        "😈 Bhai devil mode mein koi safe nahi — tu bhi nahi 🔥⚡",
+        "😈 Teri galti — devil ko challenge karna 💀😂",
+        "😈 Beta devil ki bhasha — punishment aur reward — tu punishment mein hai 🔥😈",
+        "😈 DEVIL LEVEL RAGE — teri poori life on line 💀⚡",
+        "😈 Bhai devil se lad ke koi nahi jeeta — tu bhi nahi jeetega 🔥😂",
+        "😈 Devil mode — tera sab kuch noted — sab 💀😈",
+        "😈 Beta DEVIL FIRE — teri poori duniya burn 🔥⚡",
+        "😈 DEVIL RAID COMPLETE — tujhe koi nahi bachayega 💀😂",
+        "😈 Bhai devil teri har move pe already plan bana chuka 🔥😈",
+        "😈 Devil mode — tera future bleak — teri choice thi 💀⚡",
+        "😈 Beta devil ne tujhe select kiya — koi bada reason hoga 🔥😂",
+        "😈 DEVIL STORM — teri poori squad disbanded 💀😈",
+        "😈 Bhai devil ke game mein tera turn tha — abhi mera 🔥⚡",
+        "😈 Devil raid engage — now teri responsibility 💀😂",
+        "😈 Beta devil level punishment — tujhse tune karaya tha 🔥😈",
+        "😈 DEVIL ZONE — nikal ja nahi toh devil ka guest ban 💀⚡",
+        "😈 Bhai devil hamesha sunta hai — teri bhi sun li 🔥😂",
+        "😈 Devil mode ACTIVATED — teri poori timeline hijacked 💀😈",
+        "😈 Beta devil ke saamne sirf ek option — respect ya suffer 🔥⚡",
+        "😈 DEVIL FINAL BLOW — teri defense completely gone 💀😂",
+        "😈 Bhai devil ne decide kiya — teri loss is inevitable 🔥😈",
+        "😈 Devil mein aake dekha — tu deserving nahi tha challenge ka 💀⚡",
+        "😈 Beta DEVIL RAIN — teri har cheez soaked in fire 🔥😂",
+        "😈 DEVIL vs YOU — spoiler: devil wins 💀😈",
+        "😈 Bhai devil ke saamne teri prayers bhi kaam nahi aate 🔥⚡",
+        "😈 Devil mode — teri weak spots identified — attack 💀😂",
+        "😈 Beta devil ki nazar se tu nahi chhupta 🔥😈",
+        "😈 DEVIL JUDGMENT — teri poori history reviewed — verdict: guilty 💀⚡",
+        "😈 Bhai devil ki duniya mein tu tourist tha — time up 🔥😂",
+        "😈 Devil fury — tere steps already tracked hain 💀😈",
+        "😈 Beta DEVIL COUNTER — teri har move ka counter ready tha 🔥⚡",
+        "😈 DEVIL FINISH — teri game over — my game continues 💀😂",
+        "😈 Bhai devil mode se nikalna — tujhe option nahi 🔥😈",
+        "😈 Devil attack — teri soul targeted — figuratively 💀⚡",
+        "😈 Beta devil ne kaha — teri aukat nahi — aur devil galat nahi hota 🔥😂",
+        "😈 DEVIL STORM OVER — teri side: scorched earth 💀😈",
+        "😈 Bhai devil ke rules simple hain — tu follow nahi kiya 🔥⚡",
+        "😈 Devil raid — teri position compromised — retreat 💀😂",
+        "😈 Beta DEVIL mein aake rota mat — khud aaya tha 🔥😈",
+        "😈 DEVIL WAVE — teri har defence erased 💀⚡",
+        "😈 Bhai devil ka favorite — log jo khud ko smart samjhte hain — tu 🔥😂",
+        "😈 Devil mode DONE — check teri condition 💀😈",
+        "😈 Beta devil ne aaj tujhe yaadgaar bana diya — wrong reasons se 🔥⚡",
+        ]
+
+        karma_texts = [
+           "☯️ Karma aaya — teri sab harkat ka hisaab ho raha hai 🔥💀",
+        "☯️ Beta karma kisi ki nahi sunta — teri bhi nahi 😂⚡",
+        "☯️ KARMA STRIKE — tune jo kiya woh teri taraf wapas aaya 🔥😈",
+        "☯️ Bhai karma judge nahi karta — deliver karta hai 💀😂",
+        "☯️ Karma mode activate — teri sab galtiyan wapas aa rahi hain 🔥⚡",
+        "☯️ Beta karma tujhe bhool nahi gaya — yaad rakha tha 😂💀",
+        "☯️ KARMA DELIVERY — teri harkat ka package arrive ho gaya 🔥😈",
+        "☯️ Bhai karma se koi nahi bachta — tu bhi nahi bachega 💀⚡",
+        "☯️ Karma tujhe dhundh raha tha — dhundh liya 🔥😂",
+        "☯️ Beta karma aata hai jab expect nahi karte — sun le 😂💀",
+        "☯️ KARMA HITS DIFFERENT — teri sab cheez wapas 🔥⚡",
+        "☯️ Bhai karma teri priority nahi thi — karma mein tu priority hai 😂💀",
+        "☯️ Karma cycle complete — tune jo kiya tune hi bhoga 🔥😈",
+        "☯️ Beta karma slow hota hai par sure hota hai — yeh sure tha 💀⚡",
+        "☯️ KARMA CALL — teri line pe aa gaya 🔥😂",
+        "☯️ Bhai karma mein koi error nahi — teri galti recorded thi 😂💀",
+        "☯️ Karma teri taraf waapis — enjoy 🔥⚡",
+        "☯️ Beta karma tera address jaanta tha 😂💀",
+        "☯️ KARMA FINAL — teri poori account balance zero 🔥😈",
+        "☯️ Bhai karma se lad nahi sakte — tu chhupa nahi karma se 💀⚡",
+        "☯️ Karma strike — tune deserve kiya — mila 🔥😂",
+        "☯️ Beta karma ko excuse nahi deta — sirf result deta hai 😂💀",
+        "☯️ KARMA STORM — teri sab beizzati aaj ekatha aayi 🔥⚡",
+        "☯️ Bhai karma tujhse behtar account maintain karta hai 😂💀",
+        "☯️ Karma mein tera account — overdraft mein hai 🔥😈",
+        "☯️ Beta karma ki speed teri speed se faster hai 💀⚡",
+        "☯️ KARMA BLAST — teri sab cheezon ka hisaab 🔥😂",
+        "☯️ Bhai karma ko pata tha tune kya kiya — sab record mein hai 😂💀",
+        "☯️ Karma kisi pe bhi nahi rulta — teri bhi nahi 🔥⚡",
+        "☯️ Beta karma tera future nahi — karma tera present hai 😂💀",
+        "☯️ KARMA INVOICE — teri sab galtiyon ka bill aa gaya 🔥😈",
+        "☯️ Bhai karma mein koi discount nahi milta — full price pay 💀⚡",
+        "☯️ Karma delivered — tune jo bheja wahi mila 🔥😂",
+        "☯️ Beta karma tujhse kisi ki nahi sunta — seedha deliver karta hai 😂💀",
+        "☯️ KARMA FULL CIRCLE — teri sab harkat ghumke teri hi taraf aayi 🔥⚡",
+        "☯️ Bhai karma teri taraf — aur tu prepared nahi tha 😂💀",
+        "☯️ Karma hit kiya — tujhe pata tha aayega — aaya 🔥😈",
+        "☯️ Beta karma mein interest bhi hota hai — tera compound ho gaya 💀⚡",
+        "☯️ KARMA COMPLETE — lesson mila? 🔥😂",
+        "☯️ Bhai karma ne tujhe select kiya — deservingly 😂💀",
+        "☯️ Karma tujhe yaad dila raha hai — tune kya kiya tha 🔥⚡",
+        "☯️ Beta karma ki awaaz nahi hoti — par result loud hota hai 😂💀",
+        "☯️ KARMA RESPONSE — teri har cheez ka seedha jawab 🔥😈",
+        "☯️ Bhai karma ki list mein tu first position pe tha 💀⚡",
+        "☯️ Karma tujhe bhool nahi gaya — teri galti note thi 🔥😂",
+        "☯️ Beta karma aur tu — aaj inka meetup schedule tha 😂💀",
+        "☯️ KARMA WRAP UP — teri life lesson: yeh tha 🔥⚡",
+        "☯️ Bhai karma ne apna kaam kiya — efficient tha 😂💀",
+        "☯️ Karma strike final — teri sab cheez balanced ho gayi — zero pe 🔥😈",
+        "☯️ Beta karma yaad rakhna — abhi bhi teri account open hai ☯️😂",
+        ]
+
+        doom_texts = [
+            "💀 DOOM activated — teri poori existence on countdown 🔥😈",
+        "💀 Beta doom aaya — tera timer start ho gaya 😂⚡",
+        "💀 DOOM STRIKE — teri poori defense wiped 🔥😈",
+        "💀 Bhai doom se koi nahi bachta — teri bhi date aane wali thi 😂💀",
+        "💀 Doom mode — teri sab cheez: scheduled for deletion 🔥⚡",
+        "💀 Beta doom tera waqt dekh ke aaya — perfect timing 😂😈",
+        "💀 DOOM RAID — teri poori squad: doomed 🔥💀",
+        "💀 Bhai doom pe haath lagaya — yeh result expect karna chahiye tha 😂⚡",
+        "💀 Doom finale — teri poori story: ended 🔥😈",
+        "💀 Beta doom ki awaaz sunna nahi chahte log — teri aa gayi 😂💀",
+        "💀 DOOM COMPLETE — teri sab cheez: finished 🔥⚡",
+        "💀 Bhai doom tujhse pehle plan kar ke aaya tha 😂😈",
+        "💀 Doom level CRITICAL — teri situation: hopeless 🔥💀",
+        "💀 Beta doom ne tujhe select kiya — teri achievement nahi 😂⚡",
+        "💀 DOOM COUNTDOWN — teri sab cheez: 3... 2... 1... done 🔥😈",
+        "💀 Bhai doom mein rasta ek hi hota hai — neeche 😂💀",
+        "💀 Doom activated — teri poori future: uncertain 🔥⚡",
+        "💀 Beta doom ki language — teri samajh nahi aati — result aata hai 😂😈",
+        "💀 DOOM FINAL — teri poori team: gone 🔥💀",
+        "💀 Bhai doom aur tu — aaj ka meetup tera worst tha 😂⚡",
+        "💀 Doom mode — tera har step: tracked 🔥😈",
+        "💀 Beta doom ne teri position: permanent zero confirm ki 😂💀",
+        "💀 DOOM RAIN — teri har cheez: destroyed 🔥⚡",
+        "💀 Bhai doom mein mercy nahi hoti — teri request: denied 😂😈",
+        "💀 Doom strike — teri sab galtiyan: collected 🔥💀",
+        "💀 Beta doom clock — teri ticking: started 😂⚡",
+        "💀 DOOM WAVE — teri poori defense: overwhelmed 🔥😈",
+        "💀 Bhai doom ki speed mein teri situation resolve ho gayi — badly 😂💀",
+        "💀 Doom verdict — teri case: closed — against you 🔥⚡",
+        "💀 Beta doom se pehle sun: teri galti — doom aaya 😂😈",
+        "💀 DOOM ARRIVAL — teri poori day ruined 🔥💀",
+        "💀 Bhai doom ne tujhe apna project bana liya 😂⚡",
+        "💀 Doom mode final — teri sab cheez: ash 🔥😈",
+        "💀 Beta doom ki ek khasiyat — woh aata zaroor hai 😂💀",
+        "💀 DOOM EXECUTION — teri poori plan: failed 🔥⚡",
+        "💀 Bhai doom tera number leke aaya tha — mila 😂😈",
+        "💀 Doom level MAX — teri recovery: impossible 🔥💀",
+        "💀 Beta doom ki taraf se ek gift — teri haari 😂⚡",
+        "💀 DOOM COMPLETE CYCLE — teri poori existence reset 🔥😈",
+        "💀 Bhai doom tujhse better hai — wait nahi karta 😂💀",
+        "💀 Doom mode — teri sab cheez: compromised 🔥⚡",
+        "💀 Beta DOOM aur tu — tujhe jeetna tha par doom ka hi naam hai 😂😈",
+        "💀 DOOM FINAL WAVE — teri sab: erased 🔥💀",
+        "💀 Bhai doom ne tujhe memorable bana diya — galat reasons se 😂⚡",
+        "💀 Doom activated final time — teri countdown: zero 🔥😈",
+        "💀 Beta DOOM se seekhna tha — tujhe nahi tha pata ab hai 😂💀",
+        "💀 DOOM OVER — teri side: collapsed — mine: standing 🔥⚡",
+        "💀 Bhai doom ne tera chapter likh diya — R.I.P. chapter 😂😈",
+        "💀 Doom final message — tujhe yaad rahega — sahi reasons se nahi 🔥💀",
+        "💀 Beta DOOM complete — check teri condition — yahi tha 😂⚡",
+        ]
+
+        # ─── GAME TEXTS (Menu10) ──────────────────────────────────────────────
+
+        truth_texts = [
+            "Tumhara sabse bada secret kya hai jo kisi ko nahi pata? 🤫",
+            "Kisi pe crush tha jo ab dost hai? 😳",
+            "Kabhi kisi ki baat repeat ki thi jo confidence mein batai gayi thi? 😬",
+            "Woh kaun hai jis par sabse zyada trust karte ho? ❤️",
+            "Life mein sabse bada regret kya hai? 💭",
+            "Kabhi class ya office se bina bataye bhaage ho? 😂",
+            "Tumhari sabse embarrassing memory kya hai? 😳",
+            "Kabhi kisi ko jhooth bol ke escape kiya hai? 🤥",
+            "Tumhara sabse bada fear kya hai? 😨",
+            "Kabhi kisi se pyaar kiya hai jo tumhe pata nahi? 💔",
+            "Tumhari life ka best decision kya tha? ✅",
+            "Kabhi kisi ko ghost kiya hai? 👻",
+            "Tumhara sabse bada achievement kya hai? 🏆",
+            "Kabhi kisi ko 'I love you' bola hai jhooth mein? 💀",
+            "Tumhari sabse badi weakness kya hai? 😅",
+            "Kabhi kisi ka trust todna pada hai? 💔",
+            "Tumhari favourite memory kya hai? 📸",
+            "Kabhi kisi ko dekh ke jealous feel kiya hai? 😤",
+            "Tumhara sabse bada dream kya hai? 🌟",
+            "Kabhi kisi ki feelings hurt kari hai? 😢",
+            "Tumhari sabse badi strength kya hai? 💪",
+            "Kabhi kisi ko forgive kiya hai jo worth nahi tha? 🙏",
+            "Tumhara worst date experience kya tha? 😬",
+            "Kabhi kisi ko block kiya hai without reason? 🚫",
+            "Tumhari guilty pleasure kya hai? 🍫",
+            "Kabhi kisi se jealous hoke galat kiya hai? 😤",
+            "Tumhara favourite childhood memory kya hai? 🧸",
+            "Kabhi kisi ko sacrifice kiya hai apne liye? 🥺",
+            "Tumhari life ki best advice kya hai? 💡",
+            "Kabhi apne best friend se jhooth bola hai? 🤥"
+        ]
+
+        dare_texts = [
+            "Apni maa ko call kar ke bol — 'Main tujhse pyaar karta hoon' 📞❤️",
+            "Apni sabse embarrassing photo share kar group mein 📸😹",
+            "Kisi bhi friend ko abhi message kar — 'Bhai mujhe pata chal gaya' — aur reaction dekho 😈",
+            "10 seconds ke liye khud se hi baat karo — loud 🗣️",
+            "Abhi ek push-up kar aur photo bhejo 💪",
+            "Apne crush ko 'Hi' bol — screenshot bhejo 😳",
+            "Khud ki roast karo ek paragraph mein — seriously 😂",
+            "Apna phone wallpaper change karo kisi funny photo mein 📱",
+            "5 random logo ko 'I love you' message karo 💌",
+            "Apni last seen status pe kuch funny likho 📝",
+            "Kisi bhi group mein 'Main pagal hoon' bolo 🤪",
+            "Apna profile pic change karo kisi meme se 🖼️",
+            "Apne best friend ko call karo aur kuch funny bolo 📞",
+            "Apni gallery se koi embarrassing photo share karo 📸",
+            "Kisi random person ko compliment do 🌹",
+            "Apne parents ko 'I love you' bolo ❤️",
+            "Kisi bhi chat mein 'I am the best' bolo 😎",
+            "Apna phone number kisi stranger ko do 📱",
+            "Kisi ko 'You are amazing' bol kar photo bhejo 💖",
+            "Apni life ka sabse embarrassing story share karo 📖",
+            "Kisi ko 'Mujhe tumse pyaar hai' bol kar block karo 💀",
+            "Apni bio mein kuch weird likho 📝",
+            "Kisi bhi group mein 'Main aaj gussa hoon' bolo 😤",
+            "Apne crush ko 'Hi' bol kar screenshot bhejo 😳",
+            "Kisi ko 'You are my hero' bolo 🦸",
+            "Apni last seen story mein kuch funny daalo 📱",
+            "Kisi bhi chat mein 'Main bhagwan hoon' bolo 😂",
+            "Apne best friend ko 'Main teri maa hoon' bolo 🤣",
+            "Kisi random person ko 'You are beautiful' bolo 💕",
+            "Apni life ki best memory share karo 📸"
+        ]
+
+        situation_texts = [
+            "Agar tumhe 1 crore mil jaye toh kya karoge? 💰",
+            "Agar tum 1 din invisible ho sakte ho toh kya karoge? 👻",
+            "Agar tumhe ek wish mil jaye toh kya maangoge? ✨",
+            "Agar tum president ban jao toh kya change karoge? 🏛️",
+            "Agar tumhe time travel karna hai toh kahan jaoge? ⏳",
+            "Agar tumhe 3 wishes mil jaye toh kya maangoge? 🌟",
+            "Agar tum superpower choose kar sakte ho toh kya? 🦸",
+            "Agar tumhe ek book likhni hai toh kya likhoge? 📖",
+            "Agar tum famous ho jao toh kya karoge? 🌟",
+            "Agar tumhe ek din kuch bhi karne ko mile toh kya karoge? 🎉",
+            "Agar tumhe ek country choose karni hai toh kaunsi? 🌍",
+            "Agar tumhe ek language seekhni hai toh kaunsi? 🗣️",
+            "Agar tum apna naam change kar sakte ho toh kya rakhenge? 📛",
+            "Agar tumhe apni life 1 word mein describe karni hai toh kya? 💬",
+            "Agar tumhe ek famous personality se milna hai toh kaun? 🌟",
+            "Agar tumhe 1 din life free ho toh kya karoge? 🎈",
+            "Agar tumhe apni life ka best moment choose karna hai toh kya? 📸",
+            "Agar tumhe ek skill seekhni hai toh kaunsi? 🎯",
+            "Agar tumhe apni life ka worst moment choose karna hai toh kya? 😢",
+            "Agar tumhe ek adventure karna hai toh kya? 🏔️",
+            "Agar tumhe apni life change karni hai toh kya change karoge? 🔄",
+            "Agar tumhe ek dream choose karna hai toh kya? 💭",
+            "Agar tumhe apni life ka best decision choose karna hai toh kya? ✅",
+            "Agar tumhe ek challenge choose karna hai toh kya? 🏆",
+            "Agar tumhe apni life ka best friend choose karna hai toh kaun? 🤝",
+            "Agar tumhe apni life ka worst decision choose karna hai toh kya? ❌",
+            "Agar tumhe ek goal choose karna hai toh kya? 🎯",
+            "Agar tumhe apni life ka best memory choose karna hai toh kya? 📸",
+            "Agar tumhe apni life ka worst memory choose karna hai toh kya? 😢",
+            "Agar tumhe apni life ka best achievement choose karna hai toh kya? 🏆"
+        ]
+
+        # ─── QUIZ TEXTS ────────────────────────────────────────────────────────
+
+        quiz_texts = [
+            {"q": "IIT JEE mein kaunsi book sabse important hai?", "a": "HC Verma"},
+            {"q": "Physics mein 'g' ki value kya hai?", "a": "9.8"},
+            {"q": "Formula E = mc² kisne diya?", "a": "Einstein"},
+            {"q": "IIT ka full form kya hai?", "a": "Indian Institute of Technology"},
+            {"q": "JEE ka full form kya hai?", "a": "Joint Entrance Examination"},
+            {"q": "Physics mein SI unit of force kya hai?", "a": "Newton"},
+            {"q": "Chemistry mein H2O kya hai?", "a": "Water"},
+            {"q": "Maths mein 'pi' ki value kya hai?", "a": "3.14"},
+            {"q": "Biology mein human body mein kitna water hai?", "a": "70%"},
+            {"q": "IIT mein admission kaunsi exam se hota hai?", "a": "JEE Advanced"},
+            {"q": "NEET ka full form kya hai?", "a": "National Eligibility cum Entrance Test"},
+            {"q": "Human body mein kitna blood hai?", "a": "5 liters"},
+            {"q": "Heart ka function kya hai?", "a": "Blood pump"},
+            {"q": "Brain ka weight kitna hai?", "a": "1.4 kg"},
+            {"q": "Biology mein DNA ka full form kya hai?", "a": "Deoxyribonucleic Acid"},
+            {"q": "Human eye mein kitne colors dikhte hain?", "a": "10 million"},
+            {"q": "Body mein kitne bones hain?", "a": "206"},
+            {"q": "Blood group kaunse type ke hote hain?", "a": "A, B, AB, O"},
+            {"q": "NEET mein kitne questions hote hain?", "a": "200"},
+            {"q": "MBBS ka full form kya hai?", "a": "Bachelor of Medicine and Bachelor of Surgery"},
+            {"q": "Earth ka sabse bada ocean kaunsa hai?", "a": "Pacific Ocean"},
+            {"q": "World ka sabse lamba river kaunsa hai?", "a": "Nile River"},
+            {"q": "Human body mein sabse bada organ kaunsa hai?", "a": "Skin"},
+            {"q": "Universe ka sabse bada planet kaunsa hai?", "a": "Jupiter"},
+            {"q": "Light ki speed kya hai?", "a": "3x10^8 m/s"},
+            {"q": "Earth ka sabse ooncha mountain kaunsa hai?", "a": "Mount Everest"},
+            {"q": "World mein sabse zyada population wala country kaunsa hai?", "a": "India"},
+            {"q": "Computer ka brain kaunsa hai?", "a": "CPU"},
+            {"q": "Mobile OS kaunse hain?", "a": "Android, iOS"},
+            {"q": "World ka sabse bada desert kaunsa hai?", "a": "Sahara Desert"}
+        ]
+
+        # ─── RIDDLE TEXTS ──────────────────────────────────────────────────────
+
+        riddle_texts = [
+            {"q": "Main hoon jo andar aata hai par bahar nahi jaata. Main hoon jo har insaan ke paas hai. Main kya hoon?", "a": "Sans (Breath)"},
+            {"q": "Main hoon jo duniya mein sabse bada hai, par main kisi ko dikhta nahi. Main kya hoon?", "a": "Pyaar (Love)"},
+            {"q": "Main hoon jo haath mein aata hai par pakda nahi jaata. Main kya hoon?", "a": "Pani (Water)"},
+            {"q": "Main hoon jo har insaan ko dikhta hai par koi dekh nahi sakta. Main kya hoon?", "a": "Andhera (Darkness)"},
+            {"q": "Main hoon jo kabhi nahi rukta, kabhi nahi thakta. Main kya hoon?", "a": "Samay (Time)"},
+            {"q": "Main hoon jo duniya mein sabse tez hai, par main kisi ko dikhta nahi. Main kya hoon?", "a": "Vichar (Thought)"},
+            {"q": "Main hoon jo andar hota hai par bahar nahi. Main kya hoon?", "a": "Dil (Heart)"},
+            {"q": "Main hoon jo har insaan ke paas hai par koi use nahi karta. Main kya hoon?", "a": "Dimag (Brain)"},
+            {"q": "Main hoon jo kabhi nahi sota, kabhi nahi thakta. Main kya hoon?", "a": "Aankh (Eye)"},
+            {"q": "Main hoon jo har insaan ki madad karta hai par koi use nahi dekhta. Main kya hoon?", "a": "Hawa (Air)"},
+            {"q": "Main hoon jo duniya mein sabse chhota hai, par sab se bada kaam karta hoon. Main kya hoon?", "a": "Beej (Seed)"},
+            {"q": "Main hoon jo kabhi nahi marta, kabhi nahi hota. Main kya hoon?", "a": "Atma (Soul)"}
+            {"q": "The person who makes it doesn't need it. The person who buys it doesn't use it. The person who uses it doesn't know they're using it. What is it?", "a": "coffin"}
+        ]
+            
+                    
+        # ─── FUN TEXTS (Joke, Fact, Compliment, Quotes) ──────────────────────
+
+        joke_list = [
+            "Main apni life mein itna positive hoon... ki blood group bhi B+ hai! 😂",
+            "Teacher: Kal absent kyun the? Student: Sir, mujhe bukhar tha. Teacher: Proof? Student: Aaj aa gaya na! 😹",
+            "Santa: Main ghar ke bahar khada hun. Banta: Andar aa jao. Santa: Andar wala bhi main hoon! 🤣",
+            "Meri girlfriend ne kaha — tujhse better koi nahi. Phir chali gayi. Better koi mila hoga shayad 😂",
+            "Doctor: Patient ko hawa ki zaroorat hai. Nurse: Kya karein? Doctor: Fan on karo. Nurse: Ceiling se pakad ke? 😹",
+            "Ghar mein sabse zyada kaam mera — internet chalaana! 😂",
+            "Padhai karo beta future bright hoga. Maine padhi — future gaya andhera mein. 😂",
+            "Wo bolti hai 'I need space' — main bola ठीक है, NASA se contact karo! 😂",
+            "Mera wifi itna slow hai ke circle of life bhi nahi chalta 🐢",
+            "Main sochta hoon kal se gym jaunga... kal kab aata hai? 🤔"
+            "Mummy ka 2 minute aur Maggi ka 2 minute kabhi same nahi hote"
+            "Aaj kal log 'seen' karke itna attitude dikhate hain, jaise message nahi loan approve kar rahe ho"
+            "Meri life itni private hai ki mujhe khud next update ka pata nahi hota 🤡 "
+            "Mere jokes pe sirf do log haste hain... main aur meri overconfidence 🤣"
+            "Log bolte hain Be yourself... phir judge bhi wahi log karte hain"
+            "Life ne itne twists diye hain ki Google Maps bhi rerouting kar de"
+        ]
+
+        fact_list = [
+            "🧠 Insaan ka dimag 75% paani se bana hai!",
+            "🐙 Octopus ke teen dil hote hain!",
+            "🌙 Chand par mobile signal nahi hai — par WiFi aata hai ek satellite se! (Future plan 😂)",
+            "🍯 Sahi tarike se rakha hua honey kabhi kharab nahi hota!",
+            "⚡ Bijli ka ek bolt 5 times zyada garam hota hai sun ki surface se!",
+            "🦈 Shark insaan se zyada purana hai — dinasors se bhi pehle!",
+            "👁️ Insaan ki aankh 10 million rangon ko differentiate kar sakti hai!",
+            "🐝 Ek machhar ek second mein 600 baar apne pankh hilata hai!",
+            "🦒 Giraffe ki tongue 20 inches lambi hoti hai!",
+            "🐧 Penguins ek dusre ko pehchanne ke liye unique calls use karte hain!"
+            "🚀 Space mein awaaz travel nahi karti, kyunki wahan hawa nahi hoti.",
+            "👅 Har insaan ki tongue print fingerprints ki tarah unique hoti hai.",
+            "🦒 Giraffe apni 21-inch lambi tongue se kaan saaf kar sakta hai.",
+            "⚡ Lightning ka temperature Suraj ki surface se bhi zyada hota hai
+            "🌍 Har second Earth par lagbhag 100 lightning strikes hoti hain.",
+            "🐌 Snail 3 saal tak so sakta hai (kuch species mein).",
+            "🧊 Garam paani kuch conditions mein thande paani se jaldi jam sakta hai (Mpemba effect).",
+            "👀 Insaan ka brain ulta image dekhta hai aur use seedha process karta hai.",
+            "🍌 Banana technically ek berry hai, lekin strawberry nahi.",
+            "🦘 Kangaroo peeche ki taraf chal nahi sakta.",
+            "🐧 Penguins propose karne ke liye apne partner ko chhota sa pathar gift karte hain (kuch species mein).",
+            "💀 Human body mein itni blood vessels hoti hain ki unhe line mein jodo to lagbhag 100,000 km lambi ho jaayengi.",
+            "🌌 Hum raat ko jo kuch stars dekhte hain, unki light kai saal pehle nikli hoti hai.",
+            "🐝 Bees insaanon ke chehre pehchaan sakti hain.",
+        ]
+
+        compliment_list = [
+            "Bhai tu bahut positive energy rakhta hai — seriously 🌟",
+            "Teri thinking bahut alag hai — creative hai tu 🧠✨",
+            "Tu jo bhi karta hai dil se karta hai — yeh rare hai ❤️",
+            "Teri sense of humor? Top tier 😂👑",
+            "Tujhse baat karna genuinely enjoyable hota hai 🗣️✨",
+            "Tu ek natural leader hai — log tujhe follow karte hain 👑",
+            "Teri mehnat dekh ke lagta hai, success teri waiting hai 💪",
+            "Teri smile contagious hai — sabko khushi deti hai 😊",
+            "Tu bahut strong insaan hai — sab handle kar leta hai 💪",
+            "Teri vibe bohot positive hai — tere saath time acha lagta hai ✨"
+            "You're one of a kind.",
+            "Tumhari vibe alag hi level ki hai.",
+            "You're effortlessly cool.",
+            "Tum jahan hote ho, wahan energy aa jaati hai.",
+            "You make everything look easy.",
+            "Tumhari personality hi alag hai.",
+            "You're genuinely impressive.",
+            "Tumhare ideas hamesha unique hote hain.",
+            "You're unforgettable.",
+            "Tum confidence ka perfect example ho.",
+            "Built different. 💯",
+            "Aura speaks louder than words.",
+            "You're the main character.",
+            "Tumhari smile mood fix kar deti hai.",
+            "You make people feel comfortable.",
+            "You're naturally adorable.",
+            "Tumhari laugh contagious hai.",
+            "You're a walking green flag.",
+            "You're sunshine in human form.",
+            "Tumhare saath time ka pata hi nahi chalta.",
+            "You have the kindest heart.",
+            "You're effortlessly charming.",
+            "You make ordinary moments special.",
+            "Standards on another level.",
+            "Too real to be fake.",
+            "Calm outside, dangerous inside.",
+            "Rare people have this kind of aura.",
+            "Silent, but unforgettable.",
+            "Class never chases attention.",
+            "You don't follow trends, you set them.",
+            "You're the flex you don't even need to show.",
+            "Some people have looks, you have presence.",
+            "Your aura deserves its own fan club.",
+            "You're proof that being real is attractive.",
+            "Not everyone shines, but you do.",
+            "You don't need attention, attention finds you.",
+            "Legends don't introduce themselves.",
+            "Your vibe is expensive.",
+            "You're the kind of person people remember.",
+            "You make confidence look natural. 😎",
+        ]
+
+        quote_list = [
+            "💭 'Sapne woh nahi jo sote waqt aate hain, sapne woh hain jo sone nahi dete.' — APJ Abdul Kalam",
+            "💭 'Mehnat karo itna ki luck ko bhi mauka mile tujhe dhundhne ka.' — Unknown",
+            "💭 'Duniya ka sabse bada teacher: failure hai.' — Unknown",
+            "💭 'Ek accha dost aur ek accha kitaab — dono hi tujhe better banate hain.' — Unknown",
+            "💭 'Zindagi ek echo hai — jo bejhoge woh wapas aayega.' — Unknown",
+            "💭 'Success is not final, failure is not fatal: it is the courage to continue that counts.' — Churchill",
+            "💭 'The only way to do great work is to love what you do.' — Steve Jobs",
+            "💭 'In the middle of difficulty lies opportunity.' — Einstein",
+            "💭 'Believe you can and you're halfway there.' — Theodore Roosevelt",
+            "💭 'The best time to plant a tree was 20 years ago. The second best time is now.' — Chinese Proverb"
+            "💭 People's lives don't end when they die, it ends when they lose faith. — Itachi Uchiha",
+            "💭 Wake up to reality. Nothing ever goes as planned in this world. — Madara Uchiha",
+            "💭 Those who break the rules are trash, but those who abandon their friends are worse than trash. — Kakashi Hatake",
+            "💭 When people are protecting something truly precious, they truly become strong. — Haku",
+            "💭 A lesson without pain is meaningless. — Edward Elric",
+            "💭 A person grows up when they're able to overcome hardships. — Jiraiya",
+            "💭 Power comes in response to a need, not a desire. — Goku",
+            "💭 If you don't take risks, you can't create a future. — Monkey D. Luffy",
+            "💭 The world isn't perfect, but it's there for us. — Roy Mustang",
+            "💭 Fear is not evil. It tells you your weakness. — Gildarts Clive",
+            "💭 The moment you think of giving up, think of the reason why you held on so long. — Natsu Dragneel",
+            "💭 Hard work is worthless for those that don't believe in themselves. — Naruto Uzumaki",
+            "💭 The difference between the novice and the master is that the master has failed more times than the novice has tried. — Koro-sensei",
+            "💭 To know sorrow is not terrifying. What is terrifying is to know you can't go back to happiness. — Matsumoto Rangiku",
+            "💭 Whatever you lose, you'll find it again. But what you throw away you'll never get back. — Kenshin Himura",
+            "💭 Success is not final, failure is not fatal: it is the courage to continue that counts. — Winston Churchill",
+            "💭 The only way to do great work is to love what you do. — Steve Jobs",
+            "💭 Stay hungry, stay foolish. — Steve Jobs",
+            "💭 Your time is limited, so don't waste it living someone else's life. — Steve Jobs",
+            "💭 The future belongs to those who believe in the beauty of their dreams. — Eleanor Roosevelt",
+            "💭 Be yourself; everyone else is already taken. — Oscar Wilde",
+            "💭 It always seems impossible until it's done. — Nelson Mandela",
+            "💭 Dream big and dare to fail. — Norman Vaughan",
+            "💭 Do what you can, with what you have, where you are. — Theodore Roosevelt",
+            "💭 Believe you can and you're halfway there. — Theodore Roosevelt",
+            "💭 The best way to predict the future is to create it. — Peter Drucker",
+            "💭 Discipline is choosing between what you want now and what you want most.",
+            "💭 Don't watch the clock; do what it does. Keep going. — Sam Levenson",
+            "💭 The journey of a thousand miles begins with one step. — Lao Tzu",
+            "💭 Fall seven times, stand up eight. — Japanese Proverb",
+            "💭 Action is the foundational key to all success. — Pablo Picasso",
+            "💭 Work hard in silence, let success make the noise.",
+            "💭 Great things never come from comfort zones.",
+            "💭 Small steps every day lead to big results.",
+            "💭 Consistency beats motivation.",
+            "💭 Discipline creates freedom.",
+            "💭 Your only competition is the person you were yesterday.",
+            "💭 Never let success get to your head or failure get to your heart.",
+            "💭 A calm mind is a powerful weapon.",
+            "💭 Pressure creates diamonds.",
+        ]
 
         # ─── LOAD/SAVE FUNCTIONS ───
         def load_admins():
@@ -1272,7 +2498,10 @@ async def run_user_bot(session_string, chat_id):
             "spraydelay", "addadmin", "deladmin"
         }
 
-        # ─── ATTRACTIVE MENUS ───
+        # ======================================================================
+        #                             MENUS
+        # ======================================================================
+
         @register_cmd("menu")
         async def cmd_menu(event, _):
             menu = (
@@ -1281,21 +2510,23 @@ async def run_user_bot(session_string, chat_id):
                 "╠══════════════════════════════════════════════════════════════╣\n"
                 "║                                                              ║\n"
                 "║  👑 Owner  : ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️                          ║\n"
-                "║  📦 Commands: 85+                                           ║\n"
-                "║  🔥 Prefix  : `.` (Dot) or `!` (Owner only)                ║\n"
+                "║  📦 Commands: 500+                                          ║\n"
+                "║  🔥 Prefix  : `.` (Dot)                                    ║\n"
                 "║                                                              ║\n"
                 "║  ────〔 📖 𝐌𝐀𝐈𝐍 𝐌𝐄𝐍𝐔 〕────                            ║\n"
                 "║                                                              ║\n"
-                "║  📌 `.menu1` → 👑 Admin, 🔇 Mute & 🧹 Group                ║\n"
-                "║  📌 `.menu2` → ⚔️ Raid Engine                              ║\n"
-                "║  📌 `.menu3` → 💣 Spam & 📝 Text Manager & ☠️ Deathgod     ║\n"
-                "║  📌 `.menu4` → 🛡️ Protection, 🖼️ PFP & ❤️ Auto          ║\n"
-                "║  📌 `.menu5` → 🛠️ Tools, 🎵 Music, 🧠 Notes, 🎮 Fun      ║\n"
-                "║  📌 `.menu6` → 🎭 FUN FEATURES (FULL)                     ║\n"
-                "║  📌 `.menu7` → 🎭 FUN METERS & MORE                        ║\n"
+                "║  📌 `.menu1` → 👑 Admin, 🔇 Mute, 🧹 Group, 🏷️ Auto Tag   ║\n"
+                "║  📌 `.menu2` → ⚔️ Raid Engine (Original)                   ║\n"
+                "║  📌 `.menu3` → 💣 Spam, 📝 Text, ☠️ Deathgod              ║\n"
+                "║  📌 `.menu4` → 🛡️ Protection & ❤️ Auto                   ║\n"
+                "║  📌 `.menu5` → 🛠️ Tools & 🎵 Music & 📝 Echo              ║\n"
+                "║  📌 `.menu6` → 🎭 Fun Features (Send/Tag)                 ║\n"
+                "║  📌 `.menu7` → 📊 Fun Meters (Sigma/Pookie/Baddie)        ║\n"
+                "║  📌 `.menu8` → 🎭 FUN RAIDS (Shayari/Rizz/Pickup/Roast)   ║\n"
+                "║  📌 `.menu9` → ⚔️ NON-ABUSIVE RAIDS (Attack/War/Savage/Ultra/Shame/Diss/Devil/Karma/Doom) ║\n"
+                "║  📌 `.menu10`→ 🎮 GAMES & FUN (Truth/Dare/Situation/RPS/TTT/Flip/Dice/Joke/Fact/Compliment/Quotes) ║\n"
                 "║                                                              ║\n"
-                "║  💡 Use `.cmds` for a complete list.                        ║\n"
-                "║  🔒 Owner‑only commands are marked in `.menu5`.             ║\n"
+                "║  💡 Use `.cmds` for complete command list.                  ║\n"
                 "║                                                              ║\n"
                 "╚══════════════════════════════════════════════════════════════╝"
             )
@@ -1307,7 +2538,7 @@ async def run_user_bot(session_string, chat_id):
                     await user_bot.send_file(
                         event.chat_id,
                         file=msg.media,
-                        caption="⚡  **⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  𝐄ɴᴛᴇʀs** ❤️‍🔥"
+                        caption="⚡ **⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️ 𝐄ɴᴛᴇʀs** ❤️‍🔥"
                     )
                 except:
                     pass
@@ -1316,15 +2547,13 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_menu1(event, _):
             menu = (
                 "╔══════════════════════════════════════════════════════════════╗\n"
-                "║            👑 𝐀𝐃𝐌𝐈𝐍 & 🔇 𝐌𝐔𝐓𝐄 & 🧹 𝐆𝐑𝐎𝐔𝐏            ║\n"
+                "║      👑 𝐀𝐃𝐌𝐈𝐍 • 🔇 𝐌𝐔𝐓𝐄 • 🧹 𝐆𝐑𝐎𝐔𝐏 • 🏷️ 𝐀𝐔𝐓𝐎 𝐓𝐀𝐆    ║\n"
                 "╠══════════════════════════════════════════════════════════════╣\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 👑 𝐀𝐃𝐌𝐈𝐍 〕───┐                                   ║\n"
                 "║  │  `.admins` → View all admins                             ║\n"
                 "║  │  `.addadmin @user` (or reply) → Make admin               ║\n"
                 "║  │  `.deladmin @user` (or reply) → Remove admin             ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 🔇 𝐌𝐔𝐓𝐄 & 𝐑𝐄𝐒𝐓𝐑𝐈𝐂𝐓 〕───┐                   ║\n"
                 "║  │  `.mute @user` → Local mute                              ║\n"
                 "║  │  `.unmute @user` → Local unmute                          ║\n"
@@ -1332,18 +2561,18 @@ async def run_user_bot(session_string, chat_id):
                 "║  │  `.gunmute @user` → Global unmute                        ║\n"
                 "║  │  `.mutelist` → Check mute status                         ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 🧹 𝐆𝐑𝐎𝐔𝐏 𝐌𝐎𝐃 〕───┐                           ║\n"
                 "║  │  `.lock` → Lock group messages                           ║\n"
                 "║  │  `.unlock` → Unlock group                               ║\n"
                 "║  │  `.purge <count>` → Delete N messages (max 200)          ║\n"
                 "║  │  `.throw @user` → Kick user                              ║\n"
                 "║  │  `.addbots <n>` → Add N bots from list                   ║\n"
-                "║  │  `.tagall <msg>` → Mention all members (admin)           ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
+                "║  ┌───〔 🏷️ 𝐀𝐔𝐓𝐎 𝐓𝐀𝐆 〕───┐                            ║\n"
+                "║  │  `.autotag` → Tag all members one by one                ║\n"
+                "║  │  `.stopautotag` → Stop auto tag                         ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
                 "║  📌 `.menu` → Main menu                                     ║\n"
-                "║                                                              ║\n"
                 "╚══════════════════════════════════════════════════════════════╝"
             )
             await safe_edit(event, menu)
@@ -1354,51 +2583,32 @@ async def run_user_bot(session_string, chat_id):
                 "╔══════════════════════════════════════════════════════════════╗\n"
                 "║                   ⚔️ 𝐑𝐀𝐈𝐃 𝐄𝐍𝐆𝐈𝐍𝐄                      ║\n"
                 "╠══════════════════════════════════════════════════════════════╣\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 💬 𝐑𝐄𝐏𝐋𝐘 𝐑𝐀𝐈𝐃 〕───┐                          ║\n"
                 "║  │  `.reply @user` → Start reply raid                       ║\n"
                 "║  │  `.sreply @user` → Stop reply raid                       ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 🤣 𝐑𝐑 𝐑𝐀𝐈𝐃 (Reply + React) 〕───┐              ║\n"
                 "║  │  `.rr @user` → Start RR raid                            ║\n"
                 "║  │  `.srr @user` → Stop RR raid                            ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 🚩 𝐅𝐋𝐀𝐆 𝐑𝐀𝐈𝐃 〕───┐                          ║\n"
                 "║  │  `.flag @user` → Start flag raid                         ║\n"
                 "║  │  `.sflag @user` → Stop flag raid                         ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 💗 𝐇𝐄𝐀𝐑𝐓 𝐑𝐀𝐈𝐃 〕───┐                          ║\n"
                 "║  │  `.hrr @user` → Start heart raid                         ║\n"
                 "║  │  `.shrr @user` → Stop heart raid                         ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 😈 𝐆𝐎𝐃 𝐑𝐀𝐈𝐃 (4 replies) 〕───┐                 ║\n"
                 "║  │  `.replygod @user` → Start god raid                      ║\n"
                 "║  │  `.sgod @user` → Stop god raid                           ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 🎯 𝐂𝐔𝐒𝐓𝐎𝐌 𝐑𝐀𝐈𝐃 〕───┐                        ║\n"
                 "║  │  `.customraid <text> <count>` (reply to user)            ║\n"
                 "║  │  `.stopcustomraid @user` → Stop                          ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 📜 𝐒𝐇𝐀𝐘𝐀𝐑𝐈 𝐑𝐀𝐈𝐃 〕───┐                      ║\n"
-                "║  │  `.shayariraid @user <count>`                            ║\n"
-                "║  │  `.sshayariraid @user` → Stop                            ║\n"
-                "║  │  `.shayarilist` → View all shayari                       ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 💋 𝐑𝐈𝐙𝐙 𝐑𝐀𝐈𝐃 〕───┐                          ║\n"
-                "║  │  `.rizzraid @user <count>`                               ║\n"
-                "║  │  `.srizzraid @user` → Stop                               ║\n"
-                "║  │  `.rizzlist` → View all rizz lines                       ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
+                "║  💡 For Fun Raids, use `.menu8`                            ║\n"
                 "║  📌 `.menu` → Main menu                                     ║\n"
-                "║                                                              ║\n"
                 "╚══════════════════════════════════════════════════════════════╝"
             )
             await safe_edit(event, menu)
@@ -1407,7 +2617,7 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_menu3(event, _):
             menu = (
                 "╔══════════════════════════════════════════════════════════════╗\n"
-                "║           💣 𝐒𝐏𝐀𝐌 & 📝 𝐓𝐄𝐗𝐓 𝐌𝐀𝐍𝐀𝐆𝐄𝐑 & ☠️ 𝐃𝐄𝐀𝐓𝐇𝐆𝐎𝐃      ║\n"
+                "║           💣 𝐒𝐏𝐀𝐌 & 📝 𝐓𝐄𝐗𝐓 & ☠️ 𝐃𝐄𝐀𝐓𝐇𝐆𝐎𝐃          ║\n"
                 "╠══════════════════════════════════════════════════════════════╣\n"
                 "║  ┌───〔 💣 𝐒𝐏𝐀𝐌 𝐂𝐎𝐌𝐌𝐀𝐍𝐃𝐒 〕───┐                    ║\n"
                 "║  │  `.spray <text>` or `.spray <count> <text>` → spam       ║\n"
@@ -1425,13 +2635,11 @@ async def run_user_bot(session_string, chat_id):
                 "║  │  `.deltext <num>` → Delete a text                        ║\n"
                 "║  │  `.cleartext confirm` → Delete all texts                 ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║  ┌───〔 ☠️ 𝐃𝐄𝐀𝐓𝐇𝐆𝐎𝐃 (Spam) 〕───┐                      ║\n"
+                "║  ┌───〔 ☠️ 𝐃𝐄𝐀𝐓𝐇𝐆𝐎𝐃 〕───┐                           ║\n"
                 "║  │  `.deathgod <count>` → Spam from Deathgod list           ║\n"
                 "║  │  `.sdeathgod` → Stop Deathgod                            ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  📌 `.menu` → Main menu                                     ║\n"
-                "║                                                              ║\n"
                 "╚══════════════════════════════════════════════════════════════╝"
             )
             await safe_edit(event, menu)
@@ -1442,20 +2650,17 @@ async def run_user_bot(session_string, chat_id):
                 "╔══════════════════════════════════════════════════════════════╗\n"
                 "║  🛡️ 𝐏𝐑𝐎𝐓𝐄𝐂𝐓𝐈𝐎𝐍 & 🖼️ 𝐆𝐑𝐎𝐔𝐏 𝐏𝐅𝐏 & ❤️ 𝐀𝐔𝐓𝐎  ║\n"
                 "╠══════════════════════════════════════════════════════════════╣\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 🛡️ 𝐀𝐍𝐓𝐈-𝐃𝐄𝐋𝐄𝐓𝐄 〕───┐                       ║\n"
                 "║  │  `.antidel on` → Enable protection                       ║\n"
                 "║  │  `.antidel off` → Disable                                ║\n"
                 "║  │  `.antidel` → Show status                                ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 👁️ 𝐖𝐀𝐓𝐂𝐇𝐒𝐏𝐀𝐌 〕───┐                         ║\n"
                 "║  │  `.watchspam @user <limit> <sec>`                        ║\n"
                 "║  │  `.unwatchspam @user` → Remove watch                     ║\n"
                 "║  │  `.unwatchspam` → Remove all in chat                     ║\n"
                 "║  │  `.watchlist` → Show active watches                      ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 🖼️ 𝐆𝐑𝐎𝐔𝐏 𝐏𝐅𝐏 𝐂𝐇𝐀𝐍𝐆𝐄𝐑 〕───┐                ║\n"
                 "║  │  `.setgpfp` (reply with image) → Set as group PFP        ║\n"
                 "║  │  `.addgpfp` → Add image to pool                          ║\n"
@@ -1463,7 +2668,6 @@ async def run_user_bot(session_string, chat_id):
                 "║  │  `.autogpfp <sec>` → Auto-rotate every N seconds         ║\n"
                 "║  │  `.stopgpfp` → Stop rotation                             ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 ❤️ 𝐀𝐔𝐓𝐎 𝐒𝐘𝐒𝐓𝐄𝐌 〕───┐                       ║\n"
                 "║  │  `.ar <emoji>` → Auto-react to your own msgs             ║\n"
                 "║  │  `.sar` → Disable auto-react                             ║\n"
@@ -1471,9 +2675,7 @@ async def run_user_bot(session_string, chat_id):
                 "║  │  `.unreact @user` → Remove target                        ║\n"
                 "║  │  `.reactlist` → Show all targets                         ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  📌 `.menu` → Main menu                                     ║\n"
-                "║                                                              ║\n"
                 "╚══════════════════════════════════════════════════════════════╝"
             )
             await safe_edit(event, menu)
@@ -1482,9 +2684,8 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_menu5(event, _):
             menu = (
                 "╔══════════════════════════════════════════════════════════════╗\n"
-                "║  🛠️ 𝐓𝐎𝐎𝐋𝐒 & 🎵 𝐌𝐔𝐒𝐈𝐂 & 🎮 𝐅𝐔𝐍 & 👑 𝐎𝐖𝐍𝐄𝐑  ║\n"
+                "║  🛠️ 𝐓𝐎𝐎𝐋𝐒 & 🎵 𝐌𝐔𝐒𝐈𝐂 & 📝 𝐄𝐂𝐇𝐎 & 🧠 𝐍𝐎𝐓𝐄𝐒  ║\n"
                 "╠══════════════════════════════════════════════════════════════╣\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 🛠️ 𝐓𝐎𝐎𝐋𝐒 〕───┐                                ║\n"
                 "║  │  `.tts <text> [lang]` → Text-to-Speech                   ║\n"
                 "║  │  `.qrcode <text>` → Generate QR code                     ║\n"
@@ -1497,31 +2698,24 @@ async def run_user_bot(session_string, chat_id):
                 "║  │  `.short <url>` → Shorten URL                            ║\n"
                 "║  │  `.info @user` → User info                               ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
+                "║  ┌───〔 📝 𝐄𝐂𝐇𝐎 〕───┐                                   ║\n"
+                "║  │  `.echo <text>` → Echo the text back                     ║\n"
+                "║  │  `.echo <count> <text>` → Echo N times                  ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
                 "║  ┌───〔 🎵 𝐌𝐔𝐒𝐈𝐂 〕───┐                                ║\n"
                 "║  │  `.music <song>` → Send as voice note                    ║\n"
                 "║  │  `.dmusic <song>` → Download MP3 (320kbps)               ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 🧠 𝐍𝐎𝐓𝐄𝐒 〕───┐                                ║\n"
                 "║  │  `.notesadd <text>` → Save note                          ║\n"
                 "║  │  `.noteslist` → View all notes                           ║\n"
                 "║  │  `.notesdelete <id>` → Delete note                       ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 🎮 𝐅𝐔𝐍 & 𝐒𝐓𝐀𝐓𝐔𝐒 〕───┐                      ║\n"
-                "║  │  `.ping` → Latency                                       ║\n"
-                "║  │  `.status` → Uptime & stats                              ║\n"
-                "║  │  `.flip` → Coin flip                                     ║\n"
-                "║  │  `.dice` → Dice roll                                     ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
-                "║  ┌───〔 👑 𝐎𝐖𝐍𝐄𝐑-𝐎𝐍𝐋𝐘 𝐂𝐎𝐌𝐌𝐀𝐍𝐃𝐒 〕───┐            ║\n"
+                "║  ┌───〔 👑 𝐎𝐖𝐍𝐄𝐑-𝐎𝐍𝐋𝐘 〕───┐                         ║\n"
                 "║  │  `.spraydelay <sec>` → Adjust spray speed                ║\n"
                 "║  │  `.addtext`, `.edittext`, `.deltext`, `.cleartext`       ║\n"
                 "║  │  `.addadmin` & `.deladmin`                               ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  ┌───〔 🔓 𝐀𝐃𝐌𝐈𝐍-𝐀𝐂𝐂𝐄𝐒𝐒𝐈𝐁𝐋𝐄 〕───┐                ║\n"
                 "║  │  `.nc set <lang> <text>` → Name Changer                  ║\n"
                 "║  │  `.nc stop` → Stop Name Changer                          ║\n"
@@ -1530,9 +2724,7 @@ async def run_user_bot(session_string, chat_id):
                 "║  │  `.banner` (reply with image) → Set menu banner          ║\n"
                 "║  │  `.rembanner` → Remove banner                            ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║                                                              ║\n"
                 "║  📌 `.menu` → Main menu                                     ║\n"
-                "║                                                              ║\n"
                 "╚══════════════════════════════════════════════════════════════╝"
             )
             await safe_edit(event, menu)
@@ -1541,21 +2733,15 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_menu6(event, _):
             menu = (
                 "╔══════════════════════════════════════════════════════════════╗\n"
-                "║              🎭 FUN & UTILITIES                             ║\n"
+                "║              🎭 FUN FEATURES                                ║\n"
                 "╠══════════════════════════════════════════════════════════════╣\n"
                 "║  ┌───〔 📤 SEND MESSAGE 〕───┐\n"
-                "║  │  `.send @user <message>` → Send a direct message to user  ║\n"
+                "║  │  `.send @user <message>` → Send a direct message        ║\n"
                 "║  └───────────────────────────────┘\n"
                 "║  ┌───〔 🏷️ TAG MULTIPLE USERS 〕───┐\n"
-                "║  │  `.tag @user1 msg1 @user2 msg2 ...` → Tag each user with  ║\n"
-                "║  │  separate messages in the current chat.                  ║\n"
-                "║  └───────────────────────────────┘\n"
-                "║  ┌───〔 📌 OTHER COMMANDS 〕───┐\n"
-                "║  │  For more fun commands, check `.menu5` for tools and    ║\n"
-                "║  │  `.menu3` for spam features.                            ║\n"
+                "║  │  `.tag @user1 msg1 @user2 msg2 ...` → Tag users        ║\n"
                 "║  └───────────────────────────────┘\n"
                 "║  📌 `.menu` → Main menu                                     ║\n"
-                "║                                                              ║\n"
                 "╚══════════════════════════════════════════════════════════════╝"
             )
             await safe_edit(event, menu)
@@ -1564,350 +2750,468 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_menu7(event, _):
             menu = (
                 "╔══════════════════════════════════════════════════════════════╗\n"
-                "║            🎭 FUN METERS & MORE                             ║\n"
+                "║            📊 FUN METERS                                    ║\n"
                 "╠══════════════════════════════════════════════════════════════╣\n"
-                "║  ┌───〔 📊 FUN METERS 〕───┐\n"
-                "║  │  .studmeter @user → Stud %                            ║\n"
-                "║  │  .looks @user → Looks %                               ║\n"
-                "║  │  .gay @user → Gay %                                   ║\n"
-                "║  │  .lesbian @user → Lesbian %                           ║\n"
-                "║  │  .straight @user → Straight %                         ║\n"
-                "║  │  .bi @user → Bi %                                     ║\n"
-                "║  │  .trans @user → Trans %                               ║\n"
-                "║  │  .simp @user → Simp %                                 ║\n"
-                "║  │  .chad @user → Chad %                                 ║\n"
-                "║  │  .friendly @user → Friendly %                         ║\n"
-                "║  │  .rizz @user → Rizz Meter (1-100)                    ║\n"
-                "║  │  .iq @user → IQ Score (1-200)                        ║\n"
-                "║  │  .stupidmeter @user → Stupid %                       ║\n"
+                "║  ┌───〔 📊 METERS 〕───┐\n"
+                "║  │  `.studmeter @user` → Stud %                            ║\n"
+                "║  │  `.looks @user` → Looks %                               ║\n"
+                "║  │  `.gay @user` → Gay %                                   ║\n"
+                "║  │  `.lesbian @user` → Lesbian %                           ║\n"
+                "║  │  `.straight @user` → Straight %                         ║\n"
+                "║  │  `.bi @user` → Bi %                                     ║\n"
+                "║  │  `.trans @user` → Trans %                               ║\n"
+                "║  │  `.simp @user` → Simp %                                 ║\n"
+                "║  │  `.chad @user` → Chad %                                 ║\n"
+                "║  │  `.friendly @user` → Friendly %                         ║\n"
+                "║  │  `.rizz @user` → Rizz Meter (1-100)                    ║\n"
+                "║  │  `.iq @user` → IQ Score (1-200)                        ║\n"
+                "║  │  `.stupidmeter @user` → Stupid %                       ║\n"
+                "║  │  `.sigma @user` → Sigma Meter %                        ║\n"
+                "║  │  `.pookie @user` → Pookie Meter %                      ║\n"
+                "║  │  `.baddie @user` → Baddie Meter %                      ║\n"
                 "║  └───────────────────────────────┘\n"
                 "║  ┌───〔 💖 BEST FRIEND? 〕───┐\n"
-                "║  │  .bestfrnd @user → Ask with poetic style & buttons    ║\n"
+                "║  │  `.bestfrnd @user` → Ask with poetic style & buttons    ║\n"
                 "║  └───────────────────────────────┘\n"
                 "║  ┌───〔 💔 DIVORCE & 💍 MARRIAGE 〕───┐\n"
-                "║  │  .divorce @user → Ask with Yes/No buttons             ║\n"
-                "║  │  .marriage @user → Ask with Yes/No buttons            ║\n"
+                "║  │  `.divorce @user` → Ask with Yes/No buttons             ║\n"
+                "║  │  `.marriage @user` → Ask with Yes/No buttons            ║\n"
                 "║  └───────────────────────────────┘\n"
-                "║                                                              ║\n"
-                "║  📌 .menu → Main menu                                     ║\n"
-                "║                                                              ║\n"
+                "║  📌 `.menu` → Main menu                                     ║\n"
                 "╚══════════════════════════════════════════════════════════════╝"
             )
             await safe_edit(event, menu)
 
-        # ─── FUN METERS ───
+        @register_cmd("menu8")
+        async def cmd_menu8(event, _):
+            menu = (
+                "╔══════════════════════════════════════════════════════════════╗\n"
+                "║              🎭 FUN RAIDS                                   ║\n"
+                "╠══════════════════════════════════════════════════════════════╣\n"
+                "║  ┌───〔 📜 SHAYARI RAID 〕───┐                            ║\n"
+                "║  │  `.shayariraid @user <count>`  → Start                   ║\n"
+                "║  │  `.sshayariraid @user`          → Stop                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 💋 RIZZ RAID 〕───┐                                ║\n"
+                "║  │  `.rizzraid @user <count>`      → Start                   ║\n"
+                "║  │  `.srizzraid @user`             → Stop                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 💘 PICKUP RAID 〕───┐                              ║\n"
+                "║  │  `.pickupraid @user <count>`   → Start                   ║\n"
+                "║  │  `.spickupraid @user`          → Stop                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 ❤️ ROMANCE RAID 〕───┐                              ║\n"
+                "║  │  `.romanceraid @user <count>`  → Start                   ║\n"
+                "║  │  `.sromanceraid @user`         → Stop                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 🤡 TROLL RAID 〕───┐                                ║\n"
+                "║  │  `.trollraid @user <count>`     → Start                   ║\n"
+                "║  │  `.strollraid @user`            → Stop                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 😤 RAGEBAIT RAID 〕───┐                              ║\n"
+                "║  │  `.ragebaitraid @user <count>`  → Start                   ║\n"
+                "║  │  `.sragebaitraid @user`         → Stop                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 🔥 ROAST RAID 〕───┐                                ║\n"
+                "║  │  `.roastraid @user <count>`     → Start                   ║\n"
+                "║  │  `.sroastraid @user`            → Stop                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  📌 `.menu` → Main menu                                     ║\n"
+                "╚══════════════════════════════════════════════════════════════╝"
+            )
+            await safe_edit(event, menu)
+
+        @register_cmd("menu9")
+        async def cmd_menu9(event, _):
+            menu = (
+                "╔══════════════════════════════════════════════════════════════╗\n"
+                "║         ⚔️ 𝗡𝗢𝗡-𝗔𝗕𝗨𝗦𝗜𝗩𝗘 𝗥𝗔𝗜𝗗𝗦  (𝟵 𝗧𝗬𝗣𝗘𝗦)          ║\n"
+                "╠══════════════════════════════════════════════════════════════╣\n"
+                "║  ┌───〔 ⚔️ ATTACK 〕───┐                                  ║\n"
+                "║  │  `.attackraid @user <count>`  → Start                   ║\n"
+                "║  │  `.sattackraid @user`         → Stop                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 🏴‍☠️ WAR 〕───┐                                      ║\n"
+                "║  │  `.warraid @user <count>`      → Start                   ║\n"
+                "║  │  `.swarraid @user`             → Stop                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 😈 SAVAGE 〕───┐                                    ║\n"
+                "║  │  `.savageraid @user <count>`   → Start                   ║\n"
+                "║  │  `.ssavageraid @user`          → Stop                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 ⚡ ULTRA 〕───┐                                    ║\n"
+                "║  │  `.ultraraid @user <count>`   → Start                   ║\n"
+                "║  │  `.sultraraid @user`           → Stop                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 😤 SHAME 〕───┐                                    ║\n"
+                "║  │  `.shameraid @user <count>`   → Start                   ║\n"
+                "║  │  `.sshameraid @user`          → Stop                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 🎤 DISS 〕───┐                                      ║\n"
+                "║  │  `.dissraid @user <count>`    → Start                   ║\n"
+                "║  │  `.sdissraid @user`           → Stop                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 😈 DEVIL 〕───┐                                    ║\n"
+                "║  │  `.devilraid @user <count>`   → Start                   ║\n"
+                "║  │  `.sdevilraid @user`          → Stop                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 ☯️ KARMA 〕───┐                                    ║\n"
+                "║  │  `.karmar aid @user <count>`   → Start                   ║\n"
+                "║  │  `.skarmar aid @user`           → Stop                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 💀 DOOM 〕───┐                                    ║\n"
+                "║  │  `.doomraid @user <count>`    → Start                   ║\n"
+                "║  │  `.sdoomraid @user`           → Stop                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  📌 `.menu` → Main menu                                     ║\n"
+                "╚══════════════════════════════════════════════════════════════╝"
+            )
+            await safe_edit(event, menu)
+
+        @register_cmd("menu10")
+        async def cmd_menu10(event, _):
+            menu = (
+                "╔══════════════════════════════════════════════════════════════╗\n"
+                "║          🎮 𝗚𝗔𝗠𝗘𝗦 & 𝗙𝗨𝗡  (𝗠𝗘𝗡𝗨 𝟭𝟬)                   ║\n"
+                "╠══════════════════════════════════════════════════════════════╣\n"
+                "║  ┌───〔 🎱 TRUTH / DARE / SITUATION 〕───┐                ║\n"
+                "║  │  `.truth`    → Random truth                             ║\n"
+                "║  │  `.dare`     → Random dare                              ║\n"
+                "║  │  `.situation`→ Random situation                         ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 🧩 RIDDLE WITH TIMER 〕───┐                        ║\n"
+                "║  │  `.riddle`   → Paheli with 60s timer                   ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 📚 QUIZ (JEE/NEET/GK) 〕───┐                      ║\n"
+                "║  │  `.quiz`     → Random quiz with 60s timer              ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 ✂️ RPS (Rock-Paper-Scissors) 〕───┐              ║\n"
+                "║  │  `.rps r/p/s` → Play rock-paper-scissors               ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 ❌ Tic-Tac-Toe 〕───┐                              ║\n"
+                "║  │  `.ttt`      → Start Tic-Tac-Toe game                   ║\n"
+                "║  │  `.ttt_move 1-9` → Make a move                         ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 🎲 DICE / FLIP 〕───┐                              ║\n"
+                "║  │  `.dice`     → Roll a dice                             ║\n"
+                "║  │  `.flip`     → Flip a coin                             ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 😂 JOKE / FACT / COMPLIMENT / QUOTE 〕───┐        ║\n"
+                "║  │  `.joke`     → Random joke                              ║\n"
+                "║  │  `.fact`     → Interesting fact                         ║\n"
+                "║  │  `.compliment`→ Random compliment                       ║\n"
+                "║  │  `.quote`    → Inspirational quote                      ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  📌 `.menu` → Main menu                                     ║\n"
+                "╚══════════════════════════════════════════════════════════════╝"
+            )
+            await safe_edit(event, menu)
+
+        # ======================================================================
+        #                      FUN METERS (Menu7)
+        # ======================================================================
+
         @register_cmd("studmeter")
         async def cmd_studmeter(event, arg):
             target = await get_targets(event, arg)
-            if not target:
-                return
+            if not target: return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
                 name = user.first_name or str(uid)
                 percent = random.randint(0, 100)
                 msg = f"📊 **Stud Meter for {name}**\n\n💪 Stud Level: {percent}%\n"
-                if percent >= 90:
-                    msg += "🔥 You're a legend! 💪"
-                elif percent >= 70:
-                    msg += "🌟 Pretty studly! 😎"
-                elif percent >= 50:
-                    msg += "👍 Not bad, keep it up!"
-                else:
-                    msg += "😅 Maybe try some gym? 😂"
+                if percent >= 90: msg += "🔥 You're a legend! 💪"
+                elif percent >= 70: msg += "🌟 Pretty studly! 😎"
+                elif percent >= 50: msg += "👍 Not bad, keep it up!"
+                else: msg += "😅 Maybe try some gym? 😂"
                 await safe_edit(event, msg)
-            except:
-                pass
+            except: pass
 
         @register_cmd("looks")
         async def cmd_looks(event, arg):
             target = await get_targets(event, arg)
-            if not target:
-                return
+            if not target: return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
                 name = user.first_name or str(uid)
                 percent = random.randint(0, 100)
                 msg = f"👀 **Looks Meter for {name}**\n\n🌟 Looks: {percent}%\n"
-                if percent >= 90:
-                    msg += "💖 You're a masterpiece! 😍"
-                elif percent >= 70:
-                    msg += "💕 Very attractive! 😊"
-                elif percent >= 50:
-                    msg += "😐 Average, but charming!"
-                else:
-                    msg += "😬 Maybe try a new style? 😅"
+                if percent >= 90: msg += "💖 You're a masterpiece! 😍"
+                elif percent >= 70: msg += "💕 Very attractive! 😊"
+                elif percent >= 50: msg += "😐 Average, but charming!"
+                else: msg += "😬 Maybe try a new style? 😅"
                 await safe_edit(event, msg)
-            except:
-                pass
+            except: pass
 
         @register_cmd("gay")
         async def cmd_gay(event, arg):
             target = await get_targets(event, arg)
-            if not target:
-                return
+            if not target: return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
                 name = user.first_name or str(uid)
                 percent = random.randint(0, 100)
                 msg = f"🏳️‍🌈 **Gay Percentage for {name}**\n\n🌈 Gayness: {percent}%\n"
-                if percent >= 90:
-                    msg += "🏳️‍🌈🌈 Totally gay! 😂"
-                elif percent >= 70:
-                    msg += "🌈 Pretty gay! 😏"
-                elif percent >= 50:
-                    msg += "🤔 Half and half!"
-                else:
-                    msg += "💪 Straight as an arrow!"
+                if percent >= 90: msg += "🏳️‍🌈🌈 Totally gay! 😂"
+                elif percent >= 70: msg += "🌈 Pretty gay! 😏"
+                elif percent >= 50: msg += "🤔 Half and half!"
+                else: msg += "💪 Straight as an arrow!"
                 await safe_edit(event, msg)
-            except:
-                pass
+            except: pass
 
         @register_cmd("lesbian")
         async def cmd_lesbian(event, arg):
             target = await get_targets(event, arg)
-            if not target:
-                return
+            if not target: return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
                 name = user.first_name or str(uid)
                 percent = random.randint(0, 100)
                 msg = f"👩‍❤️‍👩 **Lesbian Percentage for {name}**\n\n💖 Lesbianness: {percent}%\n"
-                if percent >= 90:
-                    msg += "👩‍❤️‍💋‍👩 Total lesbian! 😍"
-                elif percent >= 70:
-                    msg += "💕 Very gay! 😊"
-                elif percent >= 50:
-                    msg += "🤷‍♀️ Could go either way!"
-                else:
-                    msg += "💁‍♀️ Straight as a ruler!"
+                if percent >= 90: msg += "👩‍❤️‍💋‍👩 Total lesbian! 😍"
+                elif percent >= 70: msg += "💕 Very gay! 😊"
+                elif percent >= 50: msg += "🤷‍♀️ Could go either way!"
+                else: msg += "💁‍♀️ Straight as a ruler!"
                 await safe_edit(event, msg)
-            except:
-                pass
+            except: pass
 
         @register_cmd("straight")
         async def cmd_straight(event, arg):
             target = await get_targets(event, arg)
-            if not target:
-                return
+            if not target: return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
                 name = user.first_name or str(uid)
                 percent = random.randint(0, 100)
                 msg = f"💪 **Straight Percentage for {name}**\n\n📏 Straightness: {percent}%\n"
-                if percent >= 90:
-                    msg += "🏆 Straight as a ruler! 📏"
-                elif percent >= 70:
-                    msg += "😎 Pretty straight! 😏"
-                elif percent >= 50:
-                    msg += "🤷 Could be flexible!"
-                else:
-                    msg += "🌈 Maybe try exploring? 😉"
+                if percent >= 90: msg += "🏆 Straight as a ruler! 📏"
+                elif percent >= 70: msg += "😎 Pretty straight! 😏"
+                elif percent >= 50: msg += "🤷 Could be flexible!"
+                else: msg += "🌈 Maybe try exploring? 😉"
                 await safe_edit(event, msg)
-            except:
-                pass
+            except: pass
 
         @register_cmd("bi")
         async def cmd_bi(event, arg):
             target = await get_targets(event, arg)
-            if not target:
-                return
+            if not target: return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
                 name = user.first_name or str(uid)
                 percent = random.randint(0, 100)
                 msg = f"💜 **Bi Percentage for {name}**\n\n💕 Bisexuality: {percent}%\n"
-                if percent >= 90:
-                    msg += "💜💙 Totally bi! 😍"
-                elif percent >= 70:
-                    msg += "💕 Quite bi-curious! 😏"
-                elif percent >= 50:
-                    msg += "🤷‍♂️ Could go both ways!"
-                else:
-                    msg += "💁 Mostly straight!"
+                if percent >= 90: msg += "💜💙 Totally bi! 😍"
+                elif percent >= 70: msg += "💕 Quite bi-curious! 😏"
+                elif percent >= 50: msg += "🤷‍♂️ Could go both ways!"
+                else: msg += "💁 Mostly straight!"
                 await safe_edit(event, msg)
-            except:
-                pass
+            except: pass
 
         @register_cmd("trans")
         async def cmd_trans(event, arg):
             target = await get_targets(event, arg)
-            if not target:
-                return
+            if not target: return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
                 name = user.first_name or str(uid)
                 percent = random.randint(0, 100)
                 msg = f"🏳️‍⚧️ **Trans Pride for {name}**\n\n💖 Transness: {percent}%\n"
-                if percent >= 90:
-                    msg += "🌟 You're a beautiful soul! 💕"
-                elif percent >= 70:
-                    msg += "💜 Very strong! 😊"
-                elif percent >= 50:
-                    msg += "🤔 Exploring your identity?"
-                else:
-                    msg += "💁 You're you, that's enough!"
+                if percent >= 90: msg += "🌟 You're a beautiful soul! 💕"
+                elif percent >= 70: msg += "💜 Very strong! 😊"
+                elif percent >= 50: msg += "🤔 Exploring your identity?"
+                else: msg += "💁 You're you, that's enough!"
                 await safe_edit(event, msg)
-            except:
-                pass
+            except: pass
 
         @register_cmd("simp")
         async def cmd_simp(event, arg):
             target = await get_targets(event, arg)
-            if not target:
-                return
+            if not target: return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
                 name = user.first_name or str(uid)
                 percent = random.randint(0, 100)
                 msg = f"🫠 **Simp Meter for {name}**\n\n😩 Simp Level: {percent}%\n"
-                if percent >= 90:
-                    msg += "💀 Ultimate Simp! 😂"
-                elif percent >= 70:
-                    msg += "💔 Down bad! 😭"
-                elif percent >= 50:
-                    msg += "😅 Slightly simping!"
-                else:
-                    msg += "👑 You're a chad! 😎"
+                if percent >= 90: msg += "💀 Ultimate Simp! 😂"
+                elif percent >= 70: msg += "💔 Down bad! 😭"
+                elif percent >= 50: msg += "😅 Slightly simping!"
+                else: msg += "👑 You're a chad! 😎"
                 await safe_edit(event, msg)
-            except:
-                pass
+            except: pass
 
         @register_cmd("chad")
         async def cmd_chad(event, arg):
             target = await get_targets(event, arg)
-            if not target:
-                return
+            if not target: return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
                 name = user.first_name or str(uid)
                 percent = random.randint(0, 100)
                 msg = f"🗿 **Chad Meter for {name}**\n\n💪 Chad Level: {percent}%\n"
-                if percent >= 90:
-                    msg += "🔥 Sigma Chad! 😎"
-                elif percent >= 70:
-                    msg += "💪 Pretty chad! 💪"
-                elif percent >= 50:
-                    msg += "🤷 Neutral vibes!"
-                else:
-                    msg += "🥶 Maybe a bit of a beta? 😉"
+                if percent >= 90: msg += "🔥 Sigma Chad! 😎"
+                elif percent >= 70: msg += "💪 Pretty chad! 💪"
+                elif percent >= 50: msg += "🤷 Neutral vibes!"
+                else: msg += "🥶 Maybe a bit of a beta? 😉"
                 await safe_edit(event, msg)
-            except:
-                pass
+            except: pass
 
         @register_cmd("friendly")
         async def cmd_friendly(event, arg):
             target = await get_targets(event, arg)
-            if not target:
-                return
+            if not target: return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
                 name = user.first_name or str(uid)
                 percent = random.randint(0, 100)
                 msg = f"🤗 **Friendliness Meter for {name}**\n\n😊 Friendly: {percent}%\n"
-                if percent >= 90:
-                    msg += "🌈 You're a ray of sunshine! ☀️"
-                elif percent >= 70:
-                    msg += "💖 Very approachable! 😊"
-                elif percent >= 50:
-                    msg += "😐 Pretty neutral!"
-                else:
-                    msg += "😤 Maybe need to smile more?"
+                if percent >= 90: msg += "🌈 You're a ray of sunshine! ☀️"
+                elif percent >= 70: msg += "💖 Very approachable! 😊"
+                elif percent >= 50: msg += "😐 Pretty neutral!"
+                else: msg += "😤 Maybe need to smile more?"
                 await safe_edit(event, msg)
-            except:
-                pass
+            except: pass
 
         @register_cmd("rizz")
         async def cmd_rizz(event, arg):
             target = await get_targets(event, arg)
-            if not target:
-                return
+            if not target: return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
                 name = user.first_name or str(uid)
                 percent = random.randint(0, 100)
                 msg = f"💋 **Rizz Meter for {name}**\n\n🔥 Rizz Level: {percent}%\n"
-                if percent >= 90:
-                    msg += "🌹 Absolute rizz god! 😏"
-                elif percent >= 70:
-                    msg += "💕 Smooth talker! 😉"
-                elif percent >= 50:
-                    msg += "😅 Average rizz!"
-                else:
-                    msg += "🤡 Need some rizz lessons? 😂"
+                if percent >= 90: msg += "🌹 Absolute rizz god! 😏"
+                elif percent >= 70: msg += "💕 Smooth talker! 😉"
+                elif percent >= 50: msg += "😅 Average rizz!"
+                else: msg += "🤡 Need some rizz lessons? 😂"
                 await safe_edit(event, msg)
-            except:
-                pass
+            except: pass
 
         @register_cmd("iq")
         async def cmd_iq(event, arg):
             target = await get_targets(event, arg)
-            if not target:
-                return
+            if not target: return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
                 name = user.first_name or str(uid)
                 score = random.randint(50, 200)
                 msg = f"🧠 **IQ Score for {name}**\n\n📊 IQ: {score}\n"
-                if score >= 180:
-                    msg += "🌟 Genius level! 🤯"
-                elif score >= 140:
-                    msg += "💡 Very smart! 🧐"
-                elif score >= 100:
-                    msg += "👍 Average, keep learning!"
-                else:
-                    msg += "😬 Maybe read a book? 😅"
+                if score >= 180: msg += "🌟 Genius level! 🤯"
+                elif score >= 140: msg += "💡 Very smart! 🧐"
+                elif score >= 100: msg += "👍 Average, keep learning!"
+                else: msg += "😬 Maybe read a book? 😅"
                 await safe_edit(event, msg)
-            except:
-                pass
+            except: pass
 
         @register_cmd("stupidmeter")
         async def cmd_stupidmeter(event, arg):
             target = await get_targets(event, arg)
-            if not target:
-                return
+            if not target: return
             uid = next(iter(target))
             try:
                 user = await user_bot.get_entity(uid)
                 name = user.first_name or str(uid)
                 percent = random.randint(0, 100)
                 msg = f"🤪 **Stupid Meter for {name}**\n\n🧠 Stupidity Level: {percent}%\n"
-                if percent >= 90:
-                    msg += "🤡 Absolute clown! 😂"
-                elif percent >= 70:
-                    msg += "😬 Pretty dumb! 😅"
-                elif percent >= 50:
-                    msg += "🤷 Not too bright!"
-                else:
-                    msg += "🧠 Actually smart! 😎"
+                if percent >= 90: msg += "🤡 Absolute clown! 😂"
+                elif percent >= 70: msg += "😬 Pretty dumb! 😅"
+                elif percent >= 50: msg += "🤷 Not too bright!"
+                else: msg += "🧠 Actually smart! 😎"
                 await safe_edit(event, msg)
-            except:
-                pass
+            except: pass
 
-        # ─── BESTFRIEND, MARRIAGE, DIVORCE ───
+        @register_cmd("sigma")
+        async def cmd_sigma(event, arg):
+            target = await get_targets(event, arg)
+            if not target: return
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"🐺 **Sigma Meter for {name}**\n\n💀 Sigma Level: {percent}%\n"
+                if percent >= 90: msg += "🔥 Ultimate Sigma! 🐺"
+                elif percent >= 70: msg += "💪 Sigma grinding! 💀"
+                elif percent >= 50: msg += "😐 Sigma in training!"
+                else: msg += "😅 Beta vibes! 🐑"
+                await safe_edit(event, msg)
+            except: pass
+
+        @register_cmd("pookie")
+        async def cmd_pookie(event, arg):
+            target = await get_targets(event, arg)
+            if not target: return
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"🧸 **Pookie Meter for {name}**\n\n🎀 Pookie Level: {percent}%\n"
+                if percent >= 90: msg += "💕 Ultimate Pookie! 🧸"
+                elif percent >= 70: msg += "🌸 So cute Pookie! 🎀"
+                elif percent >= 50: msg += "😊 Average Pookie!"
+                else: msg += "😤 Not Pookie enough! 💀"
+                await safe_edit(event, msg)
+            except: pass
+
+        @register_cmd("baddie")
+        async def cmd_baddie(event, arg):
+            target = await get_targets(event, arg)
+            if not target: return
+            uid = next(iter(target))
+            try:
+                user = await user_bot.get_entity(uid)
+                name = user.first_name or str(uid)
+                percent = random.randint(0, 100)
+                msg = f"💅 **Baddie Meter for {name}**\n\n👸 Baddie Level: {percent}%\n"
+                if percent >= 90: msg += "🔥 Ultimate Baddie! 💅"
+                elif percent >= 70: msg += "💋 Serving Baddie vibes! 👸"
+                elif percent >= 50: msg += "😐 Average Baddie!"
+                else: msg += "😬 Need to level up! 📈"
+                await safe_edit(event, msg)
+            except: pass
+
+        # ======================================================================
+        #                      BESTFRIEND, MARRIAGE, DIVORCE
+        # ======================================================================
+
+        BESTFRIEND_SHAYARI = [
+            "💖 *Dil ki baat kehni hai, sun lo meri jaan,*\n🌸 *Tum bin adhoori hai yeh dastaan.*\n💫 *Kya tum banogi/banoge meri/mera best friend?* 🤗",
+            "🌟 *Tum ho meri khushi ka raaz,*\n🌺 *Tum bin jeena hai aawaaz.*\n🤗 *Kya tum best friend banogi/banoge?*",
+        ]
+
+        MARRIAGE_SHAYARI = [
+            "💍 *Chand sitare sab hai gawah,*\n🌹 *Tum bin jeena hai saza.*\n💕 *Kya tum mujhse shaadi karogi/karoge?*",
+            "💒 *Meri har dua mein tum ho shamil,*\n🌺 *Tum bin har khushi hai mushkil.*\n💞 *Shaadi karoge?*",
+        ]
+
+        DIVORCE_SHAYARI = [
+            "💔 *Rishton ki dor hai kamzor,*\n🌪️ *Ab nahi sahega yeh dard-e-dil.*\n❓ *Kya tum talaq chahti ho/chahte ho?*",
+            "😢 *Pyaar tha, par ab hai doori,*\n💔 *Nahi rahi ab koi majboori.*\n📜 *Talaq de do?*",
+        ]
+
         @register_cmd("bestfrnd")
         async def cmd_bestfrnd(event, arg):
             target = await get_targets(event, arg)
-            if not target:
-                return
+            if not target: return
             uid = next(iter(target))
             try:
                 requester = await user_bot.get_me()
                 requester_name = requester.first_name or "Someone"
                 target_user = await user_bot.get_entity(uid)
                 target_name = target_user.first_name or "Unknown"
-
                 shayari = random.choice(BESTFRIEND_SHAYARI)
                 final_msg = f"{shayari}\n\n**From:** {requester_name}\n**To:** {target_name}"
                 buttons = [
@@ -1916,21 +3220,18 @@ async def run_user_bot(session_string, chat_id):
                 ]
                 await event.delete()
                 await user_bot.send_message(event.chat_id, final_msg, buttons=buttons)
-            except:
-                pass
+            except: pass
 
         @register_cmd("marriage")
         async def cmd_marriage(event, arg):
             target = await get_targets(event, arg)
-            if not target:
-                return
+            if not target: return
             uid = next(iter(target))
             try:
                 requester = await user_bot.get_me()
                 requester_name = requester.first_name or "Someone"
                 target_user = await user_bot.get_entity(uid)
                 target_name = target_user.first_name or "Unknown"
-
                 shayari = random.choice(MARRIAGE_SHAYARI)
                 final_msg = f"{shayari}\n\n**From:** {requester_name}\n**To:** {target_name}"
                 buttons = [
@@ -1939,21 +3240,18 @@ async def run_user_bot(session_string, chat_id):
                 ]
                 await event.delete()
                 await user_bot.send_message(event.chat_id, final_msg, buttons=buttons)
-            except:
-                pass
+            except: pass
 
         @register_cmd("divorce")
         async def cmd_divorce(event, arg):
             target = await get_targets(event, arg)
-            if not target:
-                return
+            if not target: return
             uid = next(iter(target))
             try:
                 requester = await user_bot.get_me()
                 requester_name = requester.first_name or "Someone"
                 target_user = await user_bot.get_entity(uid)
                 target_name = target_user.first_name or "Unknown"
-
                 shayari = random.choice(DIVORCE_SHAYARI)
                 final_msg = f"{shayari}\n\n**From:** {requester_name}\n**To:** {target_name}"
                 buttons = [
@@ -1962,8 +3260,7 @@ async def run_user_bot(session_string, chat_id):
                 ]
                 await event.delete()
                 await user_bot.send_message(event.chat_id, final_msg, buttons=buttons)
-            except:
-                pass
+            except: pass
 
         @user_bot.on(events.CallbackQuery)
         async def userbot_callback(event):
@@ -2006,12 +3303,14 @@ async def run_user_bot(session_string, chat_id):
                 await event.edit("❌ Error processing your request.")
                 print(f"Callback error: {e}")
 
-        # ─── RAID COMMANDS ───
+        # ======================================================================
+        #                      ORIGINAL RAID COMMANDS
+        # ======================================================================
+
         @register_cmd("reply", needs_reply=True)
         async def cmd_reply(event, arg):
             targets = await get_targets(event, arg)
-            if not targets:
-                return
+            if not targets: return
             added, already = [], []
             for uid in targets:
                 if uid in user_bot.reply_users:
@@ -2046,8 +3345,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("rr", needs_reply=True)
         async def cmd_rr(event, arg):
             targets = await get_targets(event, arg)
-            if not targets:
-                return
+            if not targets: return
             added, already = [], []
             for uid in targets:
                 if uid in user_bot.rr_users:
@@ -2082,8 +3380,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("flag", needs_reply=True)
         async def cmd_flag(event, arg):
             targets = await get_targets(event, arg)
-            if not targets:
-                return
+            if not targets: return
             added, already = [], []
             for uid in targets:
                 if uid in user_bot.flag_users:
@@ -2118,8 +3415,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("hrr", needs_reply=True)
         async def cmd_hrr(event, arg):
             targets = await get_targets(event, arg)
-            if not targets:
-                return
+            if not targets: return
             added, already = [], []
             for uid in targets:
                 if uid in user_bot.hrr_users:
@@ -2154,8 +3450,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("replygod", needs_reply=True)
         async def cmd_replygod(event, arg):
             targets = await get_targets(event, arg)
-            if not targets:
-                return
+            if not targets: return
             added, already = [], []
             for uid in targets:
                 if uid in user_bot.replygod_users:
@@ -2199,8 +3494,7 @@ async def run_user_bot(session_string, chat_id):
             except:
                 return
             targets = await get_targets(event, "")
-            if not targets:
-                return
+            if not targets: return
             added, overridden = [], []
             for uid in targets:
                 if uid in user_bot.custom_raid_users:
@@ -2232,11 +3526,36 @@ async def run_user_bot(session_string, chat_id):
                 user_bot.custom_raid_users.clear()
                 await safe_edit(event, "🛑 All Custom Raids stopped")
 
-        # ─── SPAM COMMANDS ───
+        # ======================================================================
+        #                         ECHO COMMAND
+        # ======================================================================
+
+        @register_cmd("echo")
+        async def cmd_echo(event, arg):
+            if not arg:
+                return await safe_edit(event, "❌ Usage: `.echo <text>` or `.echo <count> <text>`")
+            
+            parts = arg.strip().split(maxsplit=1)
+            if len(parts) >= 2 and parts[0].isdigit():
+                count = int(parts[0])
+                if count < 1: count = 1
+                if count > 20: count = 20
+                text = parts[1]
+                await event.delete()
+                for i in range(count):
+                    await user_bot.send_message(event.chat_id, text)
+                    await asyncio.sleep(0.5)
+            else:
+                await event.delete()
+                await user_bot.send_message(event.chat_id, arg)
+
+        # ======================================================================
+        #                         SPAM COMMANDS
+        # ======================================================================
+
         @register_cmd("spray")
         async def cmd_spray(event, arg):
-            if not arg:
-                return
+            if not arg: return
             count = None
             text = arg
             parts = arg.split(maxsplit=1)
@@ -2245,8 +3564,7 @@ async def run_user_bot(session_string, chat_id):
                 if count < 1: count = 1
                 if count > 1000: count = 1000
                 text = parts[1] if len(parts) > 1 else ""
-                if not text:
-                    return
+                if not text: return
             chat = event.chat_id
             if chat in user_bot.spray_tasks and not user_bot.spray_tasks[chat].done():
                 return
@@ -2302,6 +3620,7 @@ async def run_user_bot(session_string, chat_id):
                 return
             user_bot.spam_texts.append(arg.strip())
             save_common_spam()
+            await safe_edit(event, f"✅ Text saved at slot {len(user_bot.spam_texts)}")
 
         @register_cmd("edittext")
         async def cmd_edittext(event, arg):
@@ -2315,6 +3634,7 @@ async def run_user_bot(session_string, chat_id):
                 return
             user_bot.spam_texts[idx] = parts[1]
             save_common_spam()
+            await safe_edit(event, f"✅ Slot {idx+1} updated")
 
         @register_cmd("deltext")
         async def cmd_deltext(event, arg):
@@ -2327,6 +3647,7 @@ async def run_user_bot(session_string, chat_id):
                 return
             user_bot.spam_texts.pop(idx)
             save_common_spam()
+            await safe_edit(event, f"🗑️ Slot {idx+1} deleted")
 
         @register_cmd("cleartext")
         async def cmd_cleartext(event, arg):
@@ -2336,6 +3657,7 @@ async def run_user_bot(session_string, chat_id):
                 return
             user_bot.spam_texts.clear()
             save_common_spam()
+            await safe_edit(event, "🗑️ All texts cleared")
 
         @register_cmd("tspray")
         async def cmd_tspray(event, arg):
@@ -2484,12 +3806,14 @@ async def run_user_bot(session_string, chat_id):
             except:
                 await safe_edit(event, "❌ Invalid number")
 
-        # ─── MUTE COMMANDS ───
+        # ======================================================================
+        #                         MUTE COMMANDS
+        # ======================================================================
+
         @register_cmd("mute", needs_reply=True)
         async def cmd_mute(event, arg):
             targets = await get_targets(event, arg)
-            if not targets:
-                return
+            if not targets: return
             added, already = [], []
             for uid in targets:
                 if uid in user_bot.muted_users:
@@ -2505,8 +3829,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("unmute", needs_reply=True)
         async def cmd_unmute(event, arg):
             targets = await get_targets(event, arg)
-            if not targets:
-                return
+            if not targets: return
             removed, not_muted = [], []
             for uid in targets:
                 if uid in user_bot.muted_users:
@@ -2522,8 +3845,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("gmute", needs_reply=True)
         async def cmd_gmute(event, arg):
             targets = await get_targets(event, arg)
-            if not targets:
-                return
+            if not targets: return
             added, already = [], []
             for uid in targets:
                 if uid in user_bot.global_muted:
@@ -2539,8 +3861,7 @@ async def run_user_bot(session_string, chat_id):
         @register_cmd("gunmute", needs_reply=True)
         async def cmd_gunmute(event, arg):
             targets = await get_targets(event, arg)
-            if not targets:
-                return
+            if not targets: return
             removed, not_muted = [], []
             for uid in targets:
                 if uid in user_bot.global_muted:
@@ -2590,7 +3911,10 @@ async def run_user_bot(session_string, chat_id):
                 text += "• None\n"
             await safe_edit(event, text)
 
-        # ─── GROUP MOD ───
+        # ======================================================================
+        #                         GROUP MOD
+        # ======================================================================
+
         @register_cmd("lock", group_only=True)
         async def cmd_lock(event, _):
             chat = event.chat_id
@@ -2699,16 +4023,19 @@ async def run_user_bot(session_string, chat_id):
                     failed += 1
             await status.edit(f"📊 Result\nAdded: {added}\nAlready: {already}\nFailed: {failed}")
 
-        @register_cmd("tagall", group_only=True)
-        async def cmd_tagall(event, arg):
+        # ======================================================================
+        #                         AUTO TAG
+        # ======================================================================
+
+        user_bot.autotag_active = False
+        user_bot.autotag_task = None
+
+        @register_cmd("autotag", group_only=True)
+        async def cmd_autotag(event, arg):
             chat = event.chat_id
-            try:
-                perms = await user_bot.get_permissions(chat, 'me')
-                if not perms.is_admin:
-                    return
-            except:
-                return
-            msg = arg.strip() if arg else "Hey everyone! 🎉"
+            if user_bot.autotag_active:
+                return await safe_edit(event, "⚠️ Auto-tag already running! Use `.stopautotag` to stop.")
+            
             await safe_edit(event, "⏳ Fetching members...")
             try:
                 participants = []
@@ -2717,30 +4044,56 @@ async def run_user_bot(session_string, chat_id):
                         participants.append(p)
                 if not participants:
                     return await safe_edit(event, "❌ No members found")
-                total = len(participants)
-                await safe_edit(event, f"⏳ {total} members found. Sending mentions...")
-                chunk_size = 50
-                chunks = [participants[i:i+chunk_size] for i in range(0, total, chunk_size)]
-                sent = 0
-                for idx, chunk in enumerate(chunks):
-                    mention_text = ""
-                    for user in chunk:
-                        if user.username:
-                            mention_text += f"@{user.username} "
-                        else:
-                            mention_text += f"[{user.first_name or 'User'}](tg://user?id={user.id}) "
-                    final_msg = f"{msg}\n\n{mention_text}" if idx == 0 else mention_text
+                
+                user_bot.autotag_active = True
+                msg = arg.strip() if arg else "Hey! 👋"
+                
+                async def autotag_loop():
                     try:
-                        await user_bot.send_message(chat, final_msg)
-                        sent += len(chunk)
-                        await asyncio.sleep(1)
-                    except FloodWaitError as fw:
-                        await asyncio.sleep(fw.seconds)
-                await safe_edit(event, f"✅ Tagged {sent} members (Total {total})")
+                        for idx, user in enumerate(participants):
+                            if not user_bot.autotag_active:
+                                break
+                            try:
+                                if user.username:
+                                    mention = f"@{user.username}"
+                                else:
+                                    mention = f"[{user.first_name or 'User'}](tg://user?id={user.id})"
+                                
+                                await user_bot.send_message(chat, f"{msg} {mention}")
+                                await asyncio.sleep(1.5)
+                            except FloodWaitError as fw:
+                                await asyncio.sleep(fw.seconds)
+                            except Exception as e:
+                                print(f"Auto-tag error: {e}")
+                            if idx % 50 == 0:
+                                await safe_edit(event, f"⏳ Tagged {idx+1}/{len(participants)} members...")
+                    except asyncio.CancelledError:
+                        pass
+                    finally:
+                        user_bot.autotag_active = False
+                        user_bot.autotag_task = None
+                        await safe_edit(event, f"✅ Auto-tag completed! Tagged {len(participants)} members.")
+                
+                user_bot.autotag_task = asyncio.create_task(autotag_loop())
+                await safe_edit(event, f"🏷️ Auto-tag started! {len(participants)} members will be tagged one by one.")
             except Exception as e:
                 await safe_edit(event, f"❌ Error: {e}")
 
-        # ─── PROTECTION ───
+        @register_cmd("stopautotag")
+        async def cmd_stopautotag(event, _):
+            if not user_bot.autotag_active:
+                return await safe_edit(event, "⚠️ No auto-tag is running.")
+            
+            user_bot.autotag_active = False
+            if user_bot.autotag_task:
+                user_bot.autotag_task.cancel()
+                user_bot.autotag_task = None
+            await safe_edit(event, "🛑 Auto-tag stopped.")
+
+        # ======================================================================
+        #                         PROTECTION
+        # ======================================================================
+
         @register_cmd("antidel")
         async def cmd_antidel(event, arg):
             arg = arg.lower() if arg else ""
@@ -2822,7 +4175,10 @@ async def run_user_bot(session_string, chat_id):
                 msg += f"• {v.get('name', uid)} → limit {v['limit']} / {v['seconds']}s\n"
             await safe_edit(event, msg)
 
-        # ─── AUTO REACT ───
+        # ======================================================================
+        #                         AUTO REACT
+        # ======================================================================
+
         @register_cmd("ar")
         async def cmd_ar(event, arg):
             if not arg:
@@ -2903,7 +4259,10 @@ async def run_user_bot(session_string, chat_id):
                     msg += f"• {uid} → {emoji}\n"
             await safe_edit(event, msg)
 
-        # ─── NOTES ───
+        # ======================================================================
+        #                         NOTES
+        # ======================================================================
+
         @register_cmd("notesadd")
         async def notes_add(event, arg):
             if not arg:
@@ -2933,7 +4292,10 @@ async def run_user_bot(session_string, chat_id):
             save_notes()
             await safe_edit(event, f"🗑️ Note {nid} deleted")
 
-        # ─── TOOLS ───
+        # ======================================================================
+        #                         TOOLS
+        # ======================================================================
+
         @register_cmd("tts")
         async def cmd_tts(event, arg):
             if not arg:
@@ -3110,7 +4472,10 @@ async def run_user_bot(session_string, chat_id):
             except Exception as e:
                 await safe_edit(event, f"❌ Info error: {e}")
 
-        # ─── MUSIC ───
+        # ======================================================================
+        #                         MUSIC
+        # ======================================================================
+
         @register_cmd("music")
         async def cmd_music(event, arg):
             if not arg:
@@ -3248,7 +4613,10 @@ async def run_user_bot(session_string, chat_id):
                     await safe_edit(event, f"❌ DMusic error: {e}")
             asyncio.create_task(download_music())
 
-        # ─── SHAYARI & RIZZ RAIDS ───
+        # ======================================================================
+        #                      FUN RAIDS (Menu8)
+        # ======================================================================
+
         @register_cmd("shayariraid", needs_reply=True)
         async def cmd_shayariraid(event, arg):
             targets = await get_targets(event, arg)
@@ -3284,16 +4652,6 @@ async def run_user_bot(session_string, chat_id):
                 await safe_edit(event, f"🛑 Removed: {', '.join(removed)}")
             else:
                 await safe_edit(event, "⚠️ No active raid for these users")
-
-        @register_cmd("shayarilist")
-        async def cmd_shayarilist(event, _):
-            if not shayari_texts:
-                return await safe_edit(event, "📭 No shayari saved")
-            msg = "📜 Shayari List:\n\n"
-            for i, txt in enumerate(shayari_texts, 1):
-                preview = txt.replace("\n", " ")[:60]
-                msg += f"`{i}.` {preview}...\n"
-            await safe_edit(event, msg)
 
         @register_cmd("rizzraid", needs_reply=True)
         async def cmd_rizzraid(event, arg):
@@ -3331,17 +4689,560 @@ async def run_user_bot(session_string, chat_id):
             else:
                 await safe_edit(event, "⚠️ No active raid for these users")
 
-        @register_cmd("rizzlist")
-        async def cmd_rizzlist(event, _):
-            if not rizz_texts:
-                return await safe_edit(event, "📭 No rizz lines saved")
-            msg = "💋 Rizz List:\n\n"
-            for i, txt in enumerate(rizz_texts, 1):
-                preview = txt.replace("\n", " ")[:60]
-                msg += f"`{i}.` {preview}...\n"
-            await safe_edit(event, msg)
+        @register_cmd("pickupraid", needs_reply=True)
+        async def cmd_pickupraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return
+            count = None
+            if arg:
+                parts = arg.strip().split()
+                if parts and parts[-1].isdigit():
+                    count = int(parts[-1])
+                    if count < 1: count = 1
+                    if count > 100: count = 100
+            if not pickup_texts:
+                return
+            added = []
+            for uid in targets:
+                user_bot.pickup_raid[uid] = count
+                user_bot.pickup_users.add(uid)
+                display = "∞" if count is None else f"{count} times"
+                added.append(f"{uid} ({display})")
+            await safe_edit(event, f"💘 Pickup raid started for {', '.join(added)}")
 
-        # ─── ADMIN ───
+        @register_cmd("spickupraid")
+        async def cmd_spickupraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                user_bot.pickup_raid.clear()
+                user_bot.pickup_users.clear()
+                return await safe_edit(event, "🛑 Pickup raid stopped for all")
+            removed = []
+            for uid in targets:
+                if uid in user_bot.pickup_raid:
+                    del user_bot.pickup_raid[uid]
+                    user_bot.pickup_users.discard(uid)
+                    removed.append(str(uid))
+            if removed:
+                await safe_edit(event, f"🛑 Removed: {', '.join(removed)}")
+            else:
+                await safe_edit(event, "⚠️ No active raid for these users")
+
+        @register_cmd("romanceraid", needs_reply=True)
+        async def cmd_romanceraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return
+            count = None
+            if arg:
+                parts = arg.strip().split()
+                if parts and parts[-1].isdigit():
+                    count = int(parts[-1])
+                    if count < 1: count = 1
+                    if count > 100: count = 100
+            if not romance_texts:
+                return
+            added = []
+            for uid in targets:
+                user_bot.romance_raid[uid] = count
+                user_bot.romance_users.add(uid)
+                display = "∞" if count is None else f"{count} times"
+                added.append(f"{uid} ({display})")
+            await safe_edit(event, f"❤️ Romance raid started for {', '.join(added)}")
+
+        @register_cmd("sromanceraid")
+        async def cmd_sromanceraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                user_bot.romance_raid.clear()
+                user_bot.romance_users.clear()
+                return await safe_edit(event, "🛑 Romance raid stopped for all")
+            removed = []
+            for uid in targets:
+                if uid in user_bot.romance_raid:
+                    del user_bot.romance_raid[uid]
+                    user_bot.romance_users.discard(uid)
+                    removed.append(str(uid))
+            if removed:
+                await safe_edit(event, f"🛑 Removed: {', '.join(removed)}")
+            else:
+                await safe_edit(event, "⚠️ No active raid for these users")
+
+        @register_cmd("trollraid", needs_reply=True)
+        async def cmd_trollraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return
+            count = None
+            if arg:
+                parts = arg.strip().split()
+                if parts and parts[-1].isdigit():
+                    count = int(parts[-1])
+                    if count < 1: count = 1
+                    if count > 100: count = 100
+            if not troll_texts:
+                return
+            added = []
+            for uid in targets:
+                user_bot.troll_raid[uid] = count
+                user_bot.trollraid_users.add(uid)
+                display = "∞" if count is None else f"{count} times"
+                added.append(f"{uid} ({display})")
+            await safe_edit(event, f"🤡 Troll raid started for {', '.join(added)}")
+
+        @register_cmd("strollraid")
+        async def cmd_strollraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                user_bot.troll_raid.clear()
+                user_bot.trollraid_users.clear()
+                return await safe_edit(event, "🛑 Troll raid stopped for all")
+            removed = []
+            for uid in targets:
+                if uid in user_bot.troll_raid:
+                    del user_bot.troll_raid[uid]
+                    user_bot.trollraid_users.discard(uid)
+                    removed.append(str(uid))
+            if removed:
+                await safe_edit(event, f"🛑 Removed: {', '.join(removed)}")
+            else:
+                await safe_edit(event, "⚠️ No active raid for these users")
+
+        @register_cmd("ragebaitraid", needs_reply=True)
+        async def cmd_ragebaitraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return
+            count = None
+            if arg:
+                parts = arg.strip().split()
+                if parts and parts[-1].isdigit():
+                    count = int(parts[-1])
+                    if count < 1: count = 1
+                    if count > 100: count = 100
+            if not ragebait_texts:
+                return
+            added = []
+            for uid in targets:
+                user_bot.ragebait_raid[uid] = count
+                user_bot.ragebait_users.add(uid)
+                display = "∞" if count is None else f"{count} times"
+                added.append(f"{uid} ({display})")
+            await safe_edit(event, f"😤 Ragebait raid started for {', '.join(added)}")
+
+        @register_cmd("sragebaitraid")
+        async def cmd_sragebaitraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                user_bot.ragebait_raid.clear()
+                user_bot.ragebait_users.clear()
+                return await safe_edit(event, "🛑 Ragebait raid stopped for all")
+            removed = []
+            for uid in targets:
+                if uid in user_bot.ragebait_raid:
+                    del user_bot.ragebait_raid[uid]
+                    user_bot.ragebait_users.discard(uid)
+                    removed.append(str(uid))
+            if removed:
+                await safe_edit(event, f"🛑 Removed: {', '.join(removed)}")
+            else:
+                await safe_edit(event, "⚠️ No active raid for these users")
+
+        @register_cmd("roastraid", needs_reply=True)
+        async def cmd_roastraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return
+            count = None
+            if arg:
+                parts = arg.strip().split()
+                if parts and parts[-1].isdigit():
+                    count = int(parts[-1])
+                    if count < 1: count = 1
+                    if count > 100: count = 100
+            if not roast_texts:
+                return
+            added = []
+            for uid in targets:
+                user_bot.roast_raid[uid] = count
+                user_bot.roastraid_users.add(uid)
+                display = "∞" if count is None else f"{count} times"
+                added.append(f"{uid} ({display})")
+            await safe_edit(event, f"🔥 Roast raid started for {', '.join(added)}")
+
+        @register_cmd("sroastraid")
+        async def cmd_sroastraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                user_bot.roast_raid.clear()
+                user_bot.roastraid_users.clear()
+                return await safe_edit(event, "🛑 Roast raid stopped for all")
+            removed = []
+            for uid in targets:
+                if uid in user_bot.roast_raid:
+                    del user_bot.roast_raid[uid]
+                    user_bot.roastraid_users.discard(uid)
+                    removed.append(str(uid))
+            if removed:
+                await safe_edit(event, f"🛑 Removed: {', '.join(removed)}")
+            else:
+                await safe_edit(event, "⚠️ No active raid for these users")
+
+        # ======================================================================
+        #                      NON-ABUSIVE RAIDS (Menu9)
+        # ======================================================================
+
+        @register_cmd("attackraid", needs_reply=True)
+        async def cmd_attackraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return
+            count = None
+            if arg:
+                parts = arg.strip().split()
+                if parts and parts[-1].isdigit():
+                    count = int(parts[-1])
+                    if count < 1: count = 1
+                    if count > 100: count = 100
+            added = []
+            for uid in targets:
+                user_bot.attack_raid[uid] = count
+                user_bot.attackraid_users.add(uid)
+                display = "∞" if count is None else f"{count} times"
+                added.append(f"{uid} ({display})")
+            await safe_edit(event, f"⚔️ Attack raid started for {', '.join(added)}")
+
+        @register_cmd("sattackraid")
+        async def cmd_sattackraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                user_bot.attack_raid.clear()
+                user_bot.attackraid_users.clear()
+                return await safe_edit(event, "🛑 Attack raid stopped for all")
+            removed = []
+            for uid in targets:
+                if uid in user_bot.attack_raid:
+                    del user_bot.attack_raid[uid]
+                    user_bot.attackraid_users.discard(uid)
+                    removed.append(str(uid))
+            if removed:
+                await safe_edit(event, f"🛑 Removed: {', '.join(removed)}")
+            else:
+                await safe_edit(event, "⚠️ No active raid for these users")
+
+        @register_cmd("warraid", needs_reply=True)
+        async def cmd_warraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return
+            count = None
+            if arg:
+                parts = arg.strip().split()
+                if parts and parts[-1].isdigit():
+                    count = int(parts[-1])
+                    if count < 1: count = 1
+                    if count > 100: count = 100
+            added = []
+            for uid in targets:
+                user_bot.war_raid[uid] = count
+                user_bot.warraid_users.add(uid)
+                display = "∞" if count is None else f"{count} times"
+                added.append(f"{uid} ({display})")
+            await safe_edit(event, f"🏴‍☠️ War raid started for {', '.join(added)}")
+
+        @register_cmd("swarraid")
+        async def cmd_swarraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                user_bot.war_raid.clear()
+                user_bot.warraid_users.clear()
+                return await safe_edit(event, "🛑 War raid stopped for all")
+            removed = []
+            for uid in targets:
+                if uid in user_bot.war_raid:
+                    del user_bot.war_raid[uid]
+                    user_bot.warraid_users.discard(uid)
+                    removed.append(str(uid))
+            if removed:
+                await safe_edit(event, f"🛑 Removed: {', '.join(removed)}")
+            else:
+                await safe_edit(event, "⚠️ No active raid for these users")
+
+        @register_cmd("savageraid", needs_reply=True)
+        async def cmd_savageraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return
+            count = None
+            if arg:
+                parts = arg.strip().split()
+                if parts and parts[-1].isdigit():
+                    count = int(parts[-1])
+                    if count < 1: count = 1
+                    if count > 100: count = 100
+            added = []
+            for uid in targets:
+                user_bot.savage_raid[uid] = count
+                user_bot.savageraid_users.add(uid)
+                display = "∞" if count is None else f"{count} times"
+                added.append(f"{uid} ({display})")
+            await safe_edit(event, f"😈 Savage raid started for {', '.join(added)}")
+
+        @register_cmd("ssavageraid")
+        async def cmd_ssavageraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                user_bot.savage_raid.clear()
+                user_bot.savageraid_users.clear()
+                return await safe_edit(event, "🛑 Savage raid stopped for all")
+            removed = []
+            for uid in targets:
+                if uid in user_bot.savage_raid:
+                    del user_bot.savage_raid[uid]
+                    user_bot.savageraid_users.discard(uid)
+                    removed.append(str(uid))
+            if removed:
+                await safe_edit(event, f"🛑 Removed: {', '.join(removed)}")
+            else:
+                await safe_edit(event, "⚠️ No active raid for these users")
+
+        @register_cmd("ultraraid", needs_reply=True)
+        async def cmd_ultraraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return
+            count = None
+            if arg:
+                parts = arg.strip().split()
+                if parts and parts[-1].isdigit():
+                    count = int(parts[-1])
+                    if count < 1: count = 1
+                    if count > 100: count = 100
+            added = []
+            for uid in targets:
+                user_bot.ultra_raid[uid] = count
+                user_bot.ultraraid_users.add(uid)
+                display = "∞" if count is None else f"{count} times"
+                added.append(f"{uid} ({display})")
+            await safe_edit(event, f"⚡ Ultra raid started for {', '.join(added)}")
+
+        @register_cmd("sultraraid")
+        async def cmd_sultraraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                user_bot.ultra_raid.clear()
+                user_bot.ultraraid_users.clear()
+                return await safe_edit(event, "🛑 Ultra raid stopped for all")
+            removed = []
+            for uid in targets:
+                if uid in user_bot.ultra_raid:
+                    del user_bot.ultra_raid[uid]
+                    user_bot.ultraraid_users.discard(uid)
+                    removed.append(str(uid))
+            if removed:
+                await safe_edit(event, f"🛑 Removed: {', '.join(removed)}")
+            else:
+                await safe_edit(event, "⚠️ No active raid for these users")
+
+        # ======================================================================
+        #                      NEW MENU9 RAIDS (Shame, Diss, Devil, Karma, Doom)
+        # ======================================================================
+
+        @register_cmd("shameraid", needs_reply=True)
+        async def cmd_shameraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return
+            count = None
+            if arg:
+                parts = arg.strip().split()
+                if parts and parts[-1].isdigit():
+                    count = int(parts[-1])
+                    if count < 1: count = 1
+                    if count > 100: count = 100
+            added = []
+            for uid in targets:
+                user_bot.shame_raid[uid] = count
+                user_bot.shame_users.add(uid)
+                display = "∞" if count is None else f"{count} times"
+                added.append(f"{uid} ({display})")
+            await safe_edit(event, f"😤 Shame raid started for {', '.join(added)}")
+
+        @register_cmd("sshameraid")
+        async def cmd_sshameraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                user_bot.shame_raid.clear()
+                user_bot.shame_users.clear()
+                return await safe_edit(event, "🛑 Shame raid stopped for all")
+            removed = []
+            for uid in targets:
+                if uid in user_bot.shame_raid:
+                    del user_bot.shame_raid[uid]
+                    user_bot.shame_users.discard(uid)
+                    removed.append(str(uid))
+            if removed:
+                await safe_edit(event, f"🛑 Removed: {', '.join(removed)}")
+            else:
+                await safe_edit(event, "⚠️ No active raid for these users")
+
+        @register_cmd("dissraid", needs_reply=True)
+        async def cmd_dissraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return
+            count = None
+            if arg:
+                parts = arg.strip().split()
+                if parts and parts[-1].isdigit():
+                    count = int(parts[-1])
+                    if count < 1: count = 1
+                    if count > 100: count = 100
+            added = []
+            for uid in targets:
+                user_bot.diss_raid[uid] = count
+                user_bot.diss_users.add(uid)
+                display = "∞" if count is None else f"{count} times"
+                added.append(f"{uid} ({display})")
+            await safe_edit(event, f"🎤 Diss raid started for {', '.join(added)}")
+
+        @register_cmd("sdissraid")
+        async def cmd_sdissraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                user_bot.diss_raid.clear()
+                user_bot.diss_users.clear()
+                return await safe_edit(event, "🛑 Diss raid stopped for all")
+            removed = []
+            for uid in targets:
+                if uid in user_bot.diss_raid:
+                    del user_bot.diss_raid[uid]
+                    user_bot.diss_users.discard(uid)
+                    removed.append(str(uid))
+            if removed:
+                await safe_edit(event, f"🛑 Removed: {', '.join(removed)}")
+            else:
+                await safe_edit(event, "⚠️ No active raid for these users")
+
+        @register_cmd("devilraid", needs_reply=True)
+        async def cmd_devilraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return
+            count = None
+            if arg:
+                parts = arg.strip().split()
+                if parts and parts[-1].isdigit():
+                    count = int(parts[-1])
+                    if count < 1: count = 1
+                    if count > 100: count = 100
+            added = []
+            for uid in targets:
+                user_bot.devil_raid[uid] = count
+                user_bot.devil_users.add(uid)
+                display = "∞" if count is None else f"{count} times"
+                added.append(f"{uid} ({display})")
+            await safe_edit(event, f"😈 Devil raid started for {', '.join(added)}")
+
+        @register_cmd("sdevilraid")
+        async def cmd_sdevilraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                user_bot.devil_raid.clear()
+                user_bot.devil_users.clear()
+                return await safe_edit(event, "🛑 Devil raid stopped for all")
+            removed = []
+            for uid in targets:
+                if uid in user_bot.devil_raid:
+                    del user_bot.devil_raid[uid]
+                    user_bot.devil_users.discard(uid)
+                    removed.append(str(uid))
+            if removed:
+                await safe_edit(event, f"🛑 Removed: {', '.join(removed)}")
+            else:
+                await safe_edit(event, "⚠️ No active raid for these users")
+
+        @register_cmd("karmaraid", needs_reply=True)
+        async def cmd_karmaraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return
+            count = None
+            if arg:
+                parts = arg.strip().split()
+                if parts and parts[-1].isdigit():
+                    count = int(parts[-1])
+                    if count < 1: count = 1
+                    if count > 100: count = 100
+            added = []
+            for uid in targets:
+                user_bot.karma_raid[uid] = count
+                user_bot.karma_users.add(uid)
+                display = "∞" if count is None else f"{count} times"
+                added.append(f"{uid} ({display})")
+            await safe_edit(event, f"☯️ Karma raid started for {', '.join(added)}")
+
+        @register_cmd("skarmaraid")
+        async def cmd_skarmaraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                user_bot.karma_raid.clear()
+                user_bot.karma_users.clear()
+                return await safe_edit(event, "🛑 Karma raid stopped for all")
+            removed = []
+            for uid in targets:
+                if uid in user_bot.karma_raid:
+                    del user_bot.karma_raid[uid]
+                    user_bot.karma_users.discard(uid)
+                    removed.append(str(uid))
+            if removed:
+                await safe_edit(event, f"🛑 Removed: {', '.join(removed)}")
+            else:
+                await safe_edit(event, "⚠️ No active raid for these users")
+
+        @register_cmd("doomraid", needs_reply=True)
+        async def cmd_doomraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return
+            count = None
+            if arg:
+                parts = arg.strip().split()
+                if parts and parts[-1].isdigit():
+                    count = int(parts[-1])
+                    if count < 1: count = 1
+                    if count > 100: count = 100
+            added = []
+            for uid in targets:
+                user_bot.doom_raid[uid] = count
+                user_bot.doom_users.add(uid)
+                display = "∞" if count is None else f"{count} times"
+                added.append(f"{uid} ({display})")
+            await safe_edit(event, f"💀 Doom raid started for {', '.join(added)}")
+
+        @register_cmd("sdoomraid")
+        async def cmd_sdoomraid(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                user_bot.doom_raid.clear()
+                user_bot.doom_users.clear()
+                return await safe_edit(event, "🛑 Doom raid stopped for all")
+            removed = []
+            for uid in targets:
+                if uid in user_bot.doom_raid:
+                    del user_bot.doom_raid[uid]
+                    user_bot.doom_users.discard(uid)
+                    removed.append(str(uid))
+            if removed:
+                await safe_edit(event, f"🛑 Removed: {', '.join(removed)}")
+            else:
+                await safe_edit(event, "⚠️ No active raid for these users")
+
+        # ======================================================================
+        #                         ADMIN
+        # ======================================================================
+
         @register_cmd("addadmin", needs_reply=True)
         async def cmd_addadmin(event, arg):
             if event.sender_id not in OWNER_IDS:
@@ -3394,7 +5295,10 @@ async def run_user_bot(session_string, chat_id):
             owner_list = "\n".join(f"👑 `{o}`" for o in sorted(OWNER_IDS))
             await safe_edit(event, f"👑 Owners:\n{owner_list}\n\n━━━━━━━━━━━━━━━\n👥 Admins:\n{admin_list}\n\nTotal Admins: {len(user_bot.admins)}")
 
-        # ─── BASIC COMMANDS ───
+        # ======================================================================
+        #                         BASIC COMMANDS (Ping, Status)
+        # ======================================================================
+
         @register_cmd("ping")
         async def cmd_ping(event, _):
             t0 = time.perf_counter()
@@ -3420,15 +5324,143 @@ async def run_user_bot(session_string, chat_id):
             uptime = int(time.time() - user_bot.START_TIME) if user_bot.START_TIME else 0
             await safe_edit(event, f"✅ Userbot Status\n━━━━━━━━━━━━━━━\n⏱️ Uptime: {uptime}s\n👑 Admins: {len(user_bot.admins)}\n⚙️ Mode: Operational")
 
-        @register_cmd("flip")
-        async def cmd_flip(event, _):
-            await safe_edit(event, f"🎲 Coin Flip\n━━━━━━━━━━━━━━━\n👉 {random.choice(['Heads', 'Tails'])}")
+        # ======================================================================
+        #                         GAMES & FUN (Menu10)
+        # ======================================================================
 
+        # ─── DICE ──────────────────────────────────────────────────────────────
         @register_cmd("dice")
         async def cmd_dice(event, _):
             await safe_edit(event, f"🎲 Dice Roll\n━━━━━━━━━━━━━━━\n👉 {random.randint(1, 6)}")
 
-        # ─── SEND COMMAND ───
+        # ─── FLIP ──────────────────────────────────────────────────────────────
+        @register_cmd("flip")
+        async def cmd_flip(event, _):
+            await safe_edit(event, f"🪙 Coin Flip\n━━━━━━━━━━━━━━━\n👉 {random.choice(['Heads', 'Tails'])}")
+
+        # ─── TRUTH ──────────────────────────────────────────────────────────────
+        @register_cmd("truth")
+        async def cmd_truth(event, _):
+            await safe_edit(event, f"🤥 **TRUTH**\n━━━━━━━━━━━━━━━\n{random.choice(truth_texts)}")
+
+        # ─── DARE ──────────────────────────────────────────────────────────────
+        @register_cmd("dare")
+        async def cmd_dare(event, _):
+            await safe_edit(event, f"😈 **DARE**\n━━━━━━━━━━━━━━━\n{random.choice(dare_texts)}")
+
+        # ─── SITUATION ──────────────────────────────────────────────────────────
+        @register_cmd("situation")
+        async def cmd_situation(event, _):
+            await safe_edit(event, f"🧐 **SITUATION**\n━━━━━━━━━━━━━━━\n{random.choice(situation_texts)}")
+
+        # ─── JOKE ──────────────────────────────────────────────────────────────
+        @register_cmd("joke")
+        async def cmd_joke(event, _):
+            await safe_edit(event, f"😂 **JOKE**\n━━━━━━━━━━━━━━━\n{random.choice(joke_list)}")
+
+        # ─── FACT ──────────────────────────────────────────────────────────────
+        @register_cmd("fact")
+        async def cmd_fact(event, _):
+            await safe_edit(event, f"🧠 **FACT**\n━━━━━━━━━━━━━━━\n{random.choice(fact_list)}")
+
+        # ─── COMPLIMENT ──────────────────────────────────────────────────────────
+        @register_cmd("compliment")
+        async def cmd_compliment(event, _):
+            await safe_edit(event, f"🌟 **COMPLIMENT**\n━━━━━━━━━━━━━━━\n{random.choice(compliment_list)}")
+
+        # ─── QUOTE ──────────────────────────────────────────────────────────────
+        @register_cmd("quote")
+        async def cmd_quote(event, _):
+            await safe_edit(event, f"💭 **QUOTE**\n━━━━━━━━━━━━━━━\n{random.choice(quote_list)}")
+
+        # ─── RPS ──────────────────────────────────────────────────────────────
+        @register_cmd("rps")
+        async def cmd_rps(event, arg):
+            choices = {"r": "🪨 Rock", "p": "📄 Paper", "s": "✂️ Scissors"}
+            wins = {"r": "s", "p": "r", "s": "p"}
+            if not arg or arg.lower() not in choices:
+                return await safe_edit(event, "❌ Use: `.rps r` (rock) / `.rps p` (paper) / `.rps s` (scissors)")
+            user = arg.lower()
+            bot = random.choice(list(choices.keys()))
+            if user == bot:
+                result = "🤝 Draw!"
+            elif wins[user] == bot:
+                result = "🏆 You Win!"
+            else:
+                result = "🤖 Bot Wins!"
+            await safe_edit(event, f"✂️🪨📄 **RPS**\n━━━━━━━━━━━━━━━\n👤 You: {choices[user]}\n🤖 Bot: {choices[bot]}\n\n{result}")
+
+        # ─── TIC TAC TOE ──────────────────────────────────────────────────────
+        ttt_games = {}
+
+        @register_cmd("ttt")
+        async def cmd_ttt(event, arg):
+            chat = event.chat_id
+            if chat in ttt_games:
+                return await safe_edit(event, "⚠️ A game is already in progress! Use `.ttt_move` to play.")
+            board = [" "] * 9
+            ttt_games[chat] = {"board": board, "turn": "X", "player": event.sender_id}
+            board_display = "```\n" + "\n".join([" | ".join(board[i:i+3]) for i in range(0, 9, 3)]) + "\n```"
+            await safe_edit(event, f"🎮 **TIC TAC TOE**\n{board_display}\n\nYour turn (X) — use `.ttt_move 1-9`")
+
+        @register_cmd("ttt_move")
+        async def cmd_ttt_move(event, arg):
+            chat = event.chat_id
+            if chat not in ttt_games:
+                return await safe_edit(event, "❌ No game active. Start with `.ttt`")
+            game = ttt_games[chat]
+            if game["player"] != event.sender_id:
+                return await safe_edit(event, "❌ Not your game!")
+            if not arg or not arg.isdigit() or int(arg) < 1 or int(arg) > 9:
+                return await safe_edit(event, "❌ Use 1-9 for position")
+            pos = int(arg) - 1
+            if game["board"][pos] != " ":
+                return await safe_edit(event, "❌ Position already taken!")
+            game["board"][pos] = game["turn"]
+            board = game["board"]
+            win = False
+            for i in range(3):
+                if board[i*3] == board[i*3+1] == board[i*3+2] != " ":
+                    win = True
+            for i in range(3):
+                if board[i] == board[i+3] == board[i+6] != " ":
+                    win = True
+            if board[0] == board[4] == board[8] != " " or board[2] == board[4] == board[6] != " ":
+                win = True
+            if win:
+                board_display = "```\n" + "\n".join([" | ".join(board[i:i+3]) for i in range(0, 9, 3)]) + "\n```"
+                await safe_edit(event, f"🎮 **TIC TAC TOE**\n{board_display}\n\n🏆 **{game['turn']} Wins!** 🎉")
+                del ttt_games[chat]
+                return
+            if " " not in board:
+                board_display = "```\n" + "\n".join([" | ".join(board[i:i+3]) for i in range(0, 9, 3)]) + "\n```"
+                await safe_edit(event, f"🎮 **TIC TAC TOE**\n{board_display}\n\n🤝 **Draw!**")
+                del ttt_games[chat]
+                return
+            game["turn"] = "O" if game["turn"] == "X" else "X"
+            board_display = "```\n" + "\n".join([" | ".join(board[i:i+3]) for i in range(0, 9, 3)]) + "\n```"
+            await safe_edit(event, f"🎮 **TIC TAC TOE**\n{board_display}\n\n{game['turn']}'s turn")
+
+        # ─── RIDDLE WITH TIMER ──────────────────────────────────────────────────
+        @register_cmd("riddle")
+        async def cmd_riddle(event, _):
+            riddle = random.choice(riddle_texts)
+            await safe_edit(event, f"🧩 **RIDDLE**\n━━━━━━━━━━━━━━━\n{riddle['q']}\n\n⏳ You have 60 seconds to think!\n💡 Answer will be revealed after timer...")
+            await asyncio.sleep(60)
+            await safe_edit(event, f"🧩 **RIDDLE ANSWER**\n━━━━━━━━━━━━━━━\n{riddle['q']}\n\n✅ **Answer:** `{riddle['a']}`")
+
+        # ─── QUIZ ──────────────────────────────────────────────────────────────
+        @register_cmd("quiz")
+        async def cmd_quiz(event, _):
+            quiz = random.choice(quiz_texts)
+            await safe_edit(event, f"📚 **QUIZ**\n━━━━━━━━━━━━━━━\n{quiz['q']}\n\n⏳ You have 60 seconds to answer!\n💡 Answer will be revealed after timer...")
+            await asyncio.sleep(60)
+            await safe_edit(event, f"📚 **QUIZ ANSWER**\n━━━━━━━━━━━━━━━\n{quiz['q']}\n\n✅ **Answer:** `{quiz['a']}`")
+
+        # ======================================================================
+        #                         SEND & TAG
+        # ======================================================================
+
         @register_cmd("send")
         async def cmd_send(event, arg):
             if not is_admin(event.sender_id):
@@ -3447,7 +5479,6 @@ async def run_user_bot(session_string, chat_id):
             except Exception as e:
                 await safe_edit(event, f"❌ Failed: {e}")
 
-        # ─── TAG COMMAND ───
         @register_cmd("tag")
         async def cmd_tag(event, arg):
             if not is_admin(event.sender_id):
@@ -3455,10 +5486,6 @@ async def run_user_bot(session_string, chat_id):
             if not arg:
                 return
             import re
-            pattern = r'@(\w+)|(\d+)'
-            matches = list(re.finditer(pattern, arg))
-            if not matches:
-                return
             tokens = arg.split()
             pairs = []
             current_target = None
@@ -3468,8 +5495,6 @@ async def run_user_bot(session_string, chat_id):
                     if current_target is not None:
                         if current_msg_parts:
                             pairs.append((current_target, ' '.join(current_msg_parts)))
-                        else:
-                            pass
                     current_target = token
                     current_msg_parts = []
                 else:
@@ -3483,7 +5508,6 @@ async def run_user_bot(session_string, chat_id):
             for target_str, message in pairs:
                 try:
                     entity = await user_bot.get_entity(target_str)
-                    # Send the message in the current chat
                     await safe_send(event.chat_id, f"[{target_str}](tg://user?id={entity.id}) {message}")
                     await asyncio.sleep(0.5)
                     sent += 1
@@ -3494,7 +5518,10 @@ async def run_user_bot(session_string, chat_id):
                 response += f"\n❌ Failed: {', '.join(failed)}"
             await safe_edit(event, response)
 
-        # ─── COPY, NORMAL, BANNER, NC ───
+        # ======================================================================
+        #                         COPY, NORMAL, BANNER, NC
+        # ======================================================================
+
         @register_cmd("copy")
         async def cmd_copy(event, args):
             if not is_admin(event.sender_id):
@@ -3680,7 +5707,10 @@ async def run_user_bot(session_string, chat_id):
             else:
                 await safe_edit(event, "❌ Invalid action. Use `set` or `stop`.")
 
-        # ─── DEATHGOD (Spam) ───
+        # ======================================================================
+        #                         DEATHGOD
+        # ======================================================================
+
         @register_cmd("deathgod")
         async def cmd_deathgod(event, arg):
             chat = event.chat_id
@@ -3731,7 +5761,10 @@ async def run_user_bot(session_string, chat_id):
             user_bot.spray_tasks.pop(chat, None)
             await safe_edit(event, "🛑 Deathgod stopped.")
 
-        # ─── DISPATCHER ───
+        # ======================================================================
+        #                         DISPATCHER
+        # ======================================================================
+
         @user_bot.on(events.NewMessage)
         async def dispatcher(event):
             text = event.raw_text
@@ -3781,7 +5814,10 @@ async def run_user_bot(session_string, chat_id):
             except Exception:
                 pass
 
-        # ─── AUTO HANDLER (FULLY IMPLEMENTED) ───
+        # ======================================================================
+        #                         AUTO HANDLER
+        # ======================================================================
+
         @user_bot.on(events.NewMessage)
         async def auto_handler(event):
             if event.out:
@@ -3791,7 +5827,7 @@ async def run_user_bot(session_string, chat_id):
             if not sender or sender in OWNER_IDS:
                 return
 
-            # --- Mute / Global Mute ---
+            # Mute / Global Mute
             if sender in user_bot.muted_users or sender in user_bot.global_muted:
                 try:
                     await event.delete()
@@ -3799,7 +5835,7 @@ async def run_user_bot(session_string, chat_id):
                     pass
                 return
 
-            # --- Watchspam ---
+            # Watchspam
             ws_key = (chat, sender)
             if ws_key in user_bot.watch_spam:
                 now = time.time()
@@ -3813,7 +5849,7 @@ async def run_user_bot(session_string, chat_id):
                         pass
                     return
 
-            # --- Group Lock ---
+            # Group Lock
             if chat in user_bot.group_locks:
                 if not is_admin(sender):
                     try:
@@ -3827,7 +5863,7 @@ async def run_user_bot(session_string, chat_id):
             if now - last_reply < 1.0:
                 return
 
-            # --- Shayari Raid ---
+            # ─── Shayari Raid ──────────────────────────────────────────────
             if sender in user_bot.shayari_raid:
                 remaining = user_bot.shayari_raid[sender]
                 if remaining is not None and remaining <= 0:
@@ -3839,7 +5875,7 @@ async def run_user_bot(session_string, chat_id):
                     user_bot.shayari_raid[sender] = remaining - 1
                 return
 
-            # --- Rizz Raid ---
+            # ─── Rizz Raid ──────────────────────────────────────────────────
             if sender in user_bot.rizz_raid:
                 remaining = user_bot.rizz_raid[sender]
                 if remaining is not None and remaining <= 0:
@@ -3851,13 +5887,13 @@ async def run_user_bot(session_string, chat_id):
                     user_bot.rizz_raid[sender] = remaining - 1
                 return
 
-            # --- Reply Raid ---
+            # ─── Original Reply Raid ──────────────────────────────────────────
             if sender in user_bot.reply_users:
                 await safe_send(chat, random.choice(reply_list), reply_to=event.id)
                 user_bot.reply_cooldowns[sender] = now
                 return
 
-            # --- Reply God (4 replies) ---
+            # ─── Reply God ──────────────────────────────────────────────────
             if sender in user_bot.replygod_users:
                 for _ in range(4):
                     await safe_send(chat, random.choice(reply_texts), reply_to=event.id)
@@ -3865,19 +5901,19 @@ async def run_user_bot(session_string, chat_id):
                 user_bot.reply_cooldowns[sender] = now
                 return
 
-            # --- Flag Raid ---
+            # ─── Flag Raid ──────────────────────────────────────────────────
             if sender in user_bot.flag_users:
                 await safe_send(chat, random.choice(flag_texts), reply_to=event.id)
                 user_bot.reply_cooldowns[sender] = now
                 return
 
-            # --- Heart Raid ---
+            # ─── Heart Raid ──────────────────────────────────────────────────
             if sender in user_bot.hrr_users:
                 await safe_send(chat, random.choice(heart_replies), reply_to=event.id)
                 user_bot.reply_cooldowns[sender] = now
                 return
 
-            # --- RR Raid (Reply + React) ---
+            # ─── RR Raid ──────────────────────────────────────────────────
             if sender in user_bot.rr_users:
                 bot_msg = await safe_send(chat, random.choice(fun_texts), reply_to=event.id)
                 if bot_msg:
@@ -3891,7 +5927,7 @@ async def run_user_bot(session_string, chat_id):
                 user_bot.reply_cooldowns[sender] = now
                 return
 
-            # --- Custom Raid ---
+            # ─── Custom Raid ──────────────────────────────────────────────────
             if sender in user_bot.custom_raid_users:
                 data = user_bot.custom_raid_users.get(sender)
                 if data and data.get("count", 0) > 0:
@@ -3902,7 +5938,206 @@ async def run_user_bot(session_string, chat_id):
                     user_bot.reply_cooldowns[sender] = now
                     return
 
-        # ─── CACHE & ANTI-DELETE ───
+            # ─── Pickup Raid ──────────────────────────────────────────────────
+            if sender in user_bot.pickup_users:
+                remaining = user_bot.pickup_raid.get(sender)
+                if remaining is not None:
+                    if isinstance(remaining, int) and remaining <= 0:
+                        del user_bot.pickup_raid[sender]
+                        user_bot.pickup_users.discard(sender)
+                        return
+                    if isinstance(remaining, int):
+                        user_bot.pickup_raid[sender] = remaining - 1
+                await safe_send(chat, random.choice(pickup_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # ─── Romance Raid ──────────────────────────────────────────────────
+            if sender in user_bot.romance_users:
+                remaining = user_bot.romance_raid.get(sender)
+                if remaining is not None:
+                    if isinstance(remaining, int) and remaining <= 0:
+                        del user_bot.romance_raid[sender]
+                        user_bot.romance_users.discard(sender)
+                        return
+                    if isinstance(remaining, int):
+                        user_bot.romance_raid[sender] = remaining - 1
+                await safe_send(chat, random.choice(romance_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # ─── Troll Raid ──────────────────────────────────────────────────
+            if sender in user_bot.trollraid_users:
+                remaining = user_bot.troll_raid.get(sender)
+                if remaining is not None:
+                    if isinstance(remaining, int) and remaining <= 0:
+                        del user_bot.troll_raid[sender]
+                        user_bot.trollraid_users.discard(sender)
+                        return
+                    if isinstance(remaining, int):
+                        user_bot.troll_raid[sender] = remaining - 1
+                await safe_send(chat, random.choice(troll_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # ─── Ragebait Raid ──────────────────────────────────────────────────
+            if sender in user_bot.ragebait_users:
+                remaining = user_bot.ragebait_raid.get(sender)
+                if remaining is not None:
+                    if isinstance(remaining, int) and remaining <= 0:
+                        del user_bot.ragebait_raid[sender]
+                        user_bot.ragebait_users.discard(sender)
+                        return
+                    if isinstance(remaining, int):
+                        user_bot.ragebait_raid[sender] = remaining - 1
+                await safe_send(chat, random.choice(ragebait_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # ─── Roast Raid ──────────────────────────────────────────────────
+            if sender in user_bot.roastraid_users:
+                remaining = user_bot.roast_raid.get(sender)
+                if remaining is not None:
+                    if isinstance(remaining, int) and remaining <= 0:
+                        del user_bot.roast_raid[sender]
+                        user_bot.roastraid_users.discard(sender)
+                        return
+                    if isinstance(remaining, int):
+                        user_bot.roast_raid[sender] = remaining - 1
+                await safe_send(chat, random.choice(roast_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # ─── Attack Raid ──────────────────────────────────────────────────
+            if sender in user_bot.attackraid_users:
+                remaining = user_bot.attack_raid.get(sender)
+                if remaining is not None:
+                    if isinstance(remaining, int) and remaining <= 0:
+                        del user_bot.attack_raid[sender]
+                        user_bot.attackraid_users.discard(sender)
+                        return
+                    if isinstance(remaining, int):
+                        user_bot.attack_raid[sender] = remaining - 1
+                await safe_send(chat, random.choice(attack_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # ─── War Raid ──────────────────────────────────────────────────
+            if sender in user_bot.warraid_users:
+                remaining = user_bot.war_raid.get(sender)
+                if remaining is not None:
+                    if isinstance(remaining, int) and remaining <= 0:
+                        del user_bot.war_raid[sender]
+                        user_bot.warraid_users.discard(sender)
+                        return
+                    if isinstance(remaining, int):
+                        user_bot.war_raid[sender] = remaining - 1
+                await safe_send(chat, random.choice(war_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # ─── Savage Raid ──────────────────────────────────────────────────
+            if sender in user_bot.savageraid_users:
+                remaining = user_bot.savage_raid.get(sender)
+                if remaining is not None:
+                    if isinstance(remaining, int) and remaining <= 0:
+                        del user_bot.savage_raid[sender]
+                        user_bot.savageraid_users.discard(sender)
+                        return
+                    if isinstance(remaining, int):
+                        user_bot.savage_raid[sender] = remaining - 1
+                await safe_send(chat, random.choice(savage_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # ─── Ultra Raid ──────────────────────────────────────────────────
+            if sender in user_bot.ultraraid_users:
+                remaining = user_bot.ultra_raid.get(sender)
+                if remaining is not None:
+                    if isinstance(remaining, int) and remaining <= 0:
+                        del user_bot.ultra_raid[sender]
+                        user_bot.ultraraid_users.discard(sender)
+                        return
+                    if isinstance(remaining, int):
+                        user_bot.ultra_raid[sender] = remaining - 1
+                await safe_send(chat, random.choice(ultra_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # ─── Shame Raid ──────────────────────────────────────────────────
+            if sender in user_bot.shame_users:
+                remaining = user_bot.shame_raid.get(sender)
+                if remaining is not None:
+                    if isinstance(remaining, int) and remaining <= 0:
+                        del user_bot.shame_raid[sender]
+                        user_bot.shame_users.discard(sender)
+                        return
+                    if isinstance(remaining, int):
+                        user_bot.shame_raid[sender] = remaining - 1
+                await safe_send(chat, random.choice(shame_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # ─── Diss Raid ──────────────────────────────────────────────────
+            if sender in user_bot.diss_users:
+                remaining = user_bot.diss_raid.get(sender)
+                if remaining is not None:
+                    if isinstance(remaining, int) and remaining <= 0:
+                        del user_bot.diss_raid[sender]
+                        user_bot.diss_users.discard(sender)
+                        return
+                    if isinstance(remaining, int):
+                        user_bot.diss_raid[sender] = remaining - 1
+                await safe_send(chat, random.choice(diss_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # ─── Devil Raid ──────────────────────────────────────────────────
+            if sender in user_bot.devil_users:
+                remaining = user_bot.devil_raid.get(sender)
+                if remaining is not None:
+                    if isinstance(remaining, int) and remaining <= 0:
+                        del user_bot.devil_raid[sender]
+                        user_bot.devil_users.discard(sender)
+                        return
+                    if isinstance(remaining, int):
+                        user_bot.devil_raid[sender] = remaining - 1
+                await safe_send(chat, random.choice(devil_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # ─── Karma Raid ──────────────────────────────────────────────────
+            if sender in user_bot.karma_users:
+                remaining = user_bot.karma_raid.get(sender)
+                if remaining is not None:
+                    if isinstance(remaining, int) and remaining <= 0:
+                        del user_bot.karma_raid[sender]
+                        user_bot.karma_users.discard(sender)
+                        return
+                    if isinstance(remaining, int):
+                        user_bot.karma_raid[sender] = remaining - 1
+                await safe_send(chat, random.choice(karma_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+            # ─── Doom Raid ──────────────────────────────────────────────────
+            if sender in user_bot.doom_users:
+                remaining = user_bot.doom_raid.get(sender)
+                if remaining is not None:
+                    if isinstance(remaining, int) and remaining <= 0:
+                        del user_bot.doom_raid[sender]
+                        user_bot.doom_users.discard(sender)
+                        return
+                    if isinstance(remaining, int):
+                        user_bot.doom_raid[sender] = remaining - 1
+                await safe_send(chat, random.choice(doom_texts), reply_to=event.id)
+                user_bot.reply_cooldowns[sender] = now
+                return
+
+        # ======================================================================
+        #                         CACHE & ANTI-DELETE
+        # ======================================================================
+
         @user_bot.on(events.NewMessage(outgoing=True))
         async def cache_own(event):
             if not user_bot.antidel_enabled:
@@ -3965,7 +6200,10 @@ async def run_user_bot(session_string, chat_id):
                 except:
                     pass
 
-        # ─── START USERBOT ───
+        # ======================================================================
+        #                         START USERBOT
+        # ======================================================================
+
         await main_bot.send_message(chat_id, f"🔥 **Your Userbot is now Active!**\n👤 {me.first_name}\n💡 Use `.menu` to get started.")
         await user_bot.run_until_disconnected()
 
