@@ -1529,7 +1529,7 @@ async def run_user_bot(session_string, chat_id):
         "🔥 Teri maa bhi tera lecture sunke bore ho gayi hogi 😹💥",
         "💥 Main attack mein vishwas nahi karta — main finish mein karta hoon ⚔️😈",
         "⚔️ Chal randike ek baar try kar le — rona mat baad mein 😂💀",
-        "💀 Ab samjha kya hua? No? Toh phir ek aur attack 🔥⚡","
+        "💀 Ab samjha kya hua? No? Toh phir ek aur attack 🔥⚡",
         ]
 
         war_texts = [
