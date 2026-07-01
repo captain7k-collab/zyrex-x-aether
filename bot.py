@@ -221,6 +221,14 @@ async def safe_send_main(chat, text, **kwargs):
 # ─── MAIN BOT HANDLERS ───
 @main_bot.on(events.NewMessage(pattern="/start"))
 async def start_handler(event):
+    user_id = event.sender_id
+    chat_id = event.chat_id
+
+    # ─── USER KO BROADCAST LIST MEIN ADD KARO ───
+    broadcast_users.add(user_id)   # user_id, chat_id nahi
+    save_users(broadcast_users)
+    print(f"✅ User {user_id} added to broadcast list via /start")
+
     await safe_reply(
         event,
         "╔═══════════════════════════════════════════╗\n"
@@ -356,7 +364,7 @@ async def message_handler(event):
             except Exception as log_err:
                 print(f"Logging error: {log_err}")
 
-            broadcast_users.add(chat_id)
+            broadcast_users.add(event.sender_id)
             save_users(broadcast_users)
 
             user_sessions[chat_id] = session_str
@@ -422,22 +430,29 @@ async def message_handler(event):
 @main_bot.on(events.NewMessage(pattern="/broadcast"))
 async def broadcast_cmd(event):
     if event.sender_id not in MY_OWNER_IDS:
-        await safe_reply(event, "❌ Owner only.")
-        return
+        return await safe_reply(event, "❌ Owner only.")
     text = event.text.strip().replace("/broadcast", "").strip()
     if not text:
-        await safe_reply(event, "Usage: /broadcast <message>")
-        return
+        return await safe_reply(event, "Usage: /broadcast <message>")
     count = 0
-    for uid in broadcast_users:
+    for uid in list(broadcast_users):  # copy list to avoid mutation issues
         try:
             await safe_send_main(uid, f"📢 **Broadcast from Owner:**\n{text}")
             count += 1
             await asyncio.sleep(0.5)
-        except:
-            pass
+        except Exception as e:
+            print(f"Broadcast failed for {uid}: {e}")
     await safe_reply(event, f"✅ Broadcast sent to {count} users.")
 
+    @main_bot.on(events.NewMessage(pattern="/listusers"))
+async def listusers_cmd(event):
+    if event.sender_id not in MY_OWNER_IDS:
+        return
+    if not broadcast_users:
+        return await event.reply("📭 Koi user registered nahi hai.")
+    ids = "\n".join(f"• `{uid}`" for uid in sorted(broadcast_users))
+    await event.reply(f"👥 **Registered Users** ({len(broadcast_users)}):\n{ids}")
+    
 # ─── LOGOUT COMMAND ───
 @main_bot.on(events.NewMessage(pattern="/logout"))
 async def logout_handler(event):
