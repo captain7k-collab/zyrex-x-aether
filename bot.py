@@ -2169,7 +2169,7 @@ async def run_user_bot(session_string, chat_id):
             "🚀 Space mein awaaz travel nahi karti, kyunki wahan hawa nahi hoti.",
             "👅 Har insaan ki tongue print fingerprints ki tarah unique hoti hai.",
             "🦒 Giraffe apni 21-inch lambi tongue se kaan saaf kar sakta hai.",
-            "⚡ Lightning ka temperature Suraj ki surface se bhi zyada hota hai
+            "⚡ Lightning ka temperature Suraj ki surface se bhi zyada hota hai",
             "🌍 Har second Earth par lagbhag 100 lightning strikes hoti hain.",
             "🐌 Snail 3 saal tak so sakta hai (kuch species mein).",
             "🧊 Garam paani kuch conditions mein thande paani se jaldi jam sakta hai (Mpemba effect).",
@@ -2192,7 +2192,7 @@ async def run_user_bot(session_string, chat_id):
             "Teri mehnat dekh ke lagta hai, success teri waiting hai 💪",
             "Teri smile contagious hai — sabko khushi deti hai 😊",
             "Tu bahut strong insaan hai — sab handle kar leta hai 💪",
-            "Teri vibe bohot positive hai — tere saath time acha lagta hai ✨"
+            "Teri vibe bohot positive hai — tere saath time acha lagta hai ✨",
             "You're one of a kind.",
             "Tumhari vibe alag hi level ki hai.",
             "You're effortlessly cool.",
@@ -2236,7 +2236,7 @@ async def run_user_bot(session_string, chat_id):
         ]
 
         quote_list = [
-            "💭 'Sapne woh nahi jo sote waqt aate hain, sapne woh hain jo sone nahi dete.' — APJ Abdul Kalam",
+            "💭 Sapne woh nahi jo sote waqt aate hain, sapne woh hain jo sone nahi dete. — APJ Abdul Kalam",
             "💭 'Mehnat karo itna ki luck ko bhi mauka mile tujhe dhundhne ka.' — Unknown",
             "💭 'Duniya ka sabse bada teacher: failure hai.' — Unknown",
             "💭 'Ek accha dost aur ek accha kitaab — dono hi tujhe better banate hain.' — Unknown",
