@@ -1461,7 +1461,7 @@ async def run_user_bot(session_string, chat_id):
             "🔥 Tu aisa WiFi password hai jo koi yaad nahi rakhta 🔑😹",
             "🤣 Beta teri awaaz sunne ke baad mujhe silence zyada priceless laga 🤫😂",
             "😹 Bhai tera roast karna waisa hai jaise sadi hui vegetable ko season karna 🥦🔥",
-            "🔥 Teri social skills dekh ke chatbot bhi impress ho ga
+            "🔥 Teri social skills dekh ke chatbot bhi impress ho ga",
             "Your existence is a notification I always swipe away 📱",
             "You're like a software update — always annoying and never useful 💻",
             "Your brain is like a browser with 100 tabs open — all useless 🌐",
