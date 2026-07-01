@@ -517,7 +517,12 @@ async def purnjanam_handler(event):
     await safe_reply(event, f"✅ **पुनर्जन्म पूर्ण!**\n🔄 {count} userbots restart kiye gaye.")
 
 # ─── SUPERVISED USERBOT LAUNCHER ──────────────────────
+# ─── SUPERVISED USERBOT LAUNCHER ──────────────────────
 async def run_user_bot_with_restart(session_string, chat_id):
+    restart_count = 0
+    last_restart_time = 0
+    session_invalid_notified = False  # Flag to prevent repeated notifications
+    
     while True:
         try:
             await run_user_bot(session_string, chat_id)
@@ -532,18 +537,119 @@ async def run_user_bot_with_restart(session_string, chat_id):
             except:
                 pass
             await asyncio.sleep(wait)
-        except Exception as e:
+            restart_count = 0
+            session_invalid_notified = False
+        except (UnauthorizedError, ValueError, RPCError) as e:
+            # ─── SESSION INVALID / UNAUTHORIZED ───
             error_msg = str(e)
-            if "SESSION_INVALID" in error_msg:
-                print("Session invalid – stopping restart loop.")
-                break
-            print(f"⚠️ Userbot crashed: {error_msg[:100]}\nRestarting in 5 seconds...")
+            print(f"❌ Session invalid for user {chat_id} – stopping restart loop.")
+            
+            # Send notification only ONCE
+            if not session_invalid_notified:
+                session_invalid_notified = True
+                try:
+                    await main_bot.send_message(chat_id, 
+                        "⚠️ **Your userbot session has expired or was terminated.**\n\n"
+                        "Please login again using `/login` to restart your userbot.\n\n"
+                        "🛑 This userbot will not restart automatically."
+                    )
+                    for owner in MY_OWNER_IDS:
+                        await main_bot.send_message(owner, 
+                            f"🔴 **Userbot Session Invalid**\n"
+                            f"👤 User: {chat_id}\n"
+                            f"📌 Reason: Device terminated or session expired\n"
+                            f"⏰ Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+                        )
+                except:
+                    pass
+            
+            # Clean up - stop the userbot completely
             try:
-                await main_bot.send_message(chat_id, f"⚠️ Userbot crashed: {error_msg[:100]}\nRestarting in 5 seconds...")
-                for owner in MY_OWNER_IDS:
-                    await main_bot.send_message(owner, f"🔄 **Userbot Restart**\nUser: {chat_id}\nReason: {error_msg[:80]}")
+                if chat_id in active_userbots:
+                    await active_userbots[chat_id].disconnect()
+                    del active_userbots[chat_id]
             except:
                 pass
+            
+            # Remove session from storage so it won't restart on bot restart
+            user_sessions.pop(chat_id, None)
+            await delete_session(chat_id)
+            
+            # STOP THE RESTART LOOP COMPLETELY
+            break
+            
+        except Exception as e:
+            error_msg = str(e)
+            
+            # ─── SESSION INVALID IN ERROR MESSAGE ───
+            if "SESSION_INVALID" in error_msg or "invalid" in error_msg.lower():
+                if not session_invalid_notified:
+                    session_invalid_notified = True
+                    try:
+                        await main_bot.send_message(chat_id, 
+                            "⚠️ **Your userbot session has expired.**\n\n"
+                            "Please login again using `/login`.\n\n"
+                            "🛑 This userbot will not restart automatically."
+                        )
+                        for owner in MY_OWNER_IDS:
+                            await main_bot.send_message(owner, 
+                                f"🔴 **Userbot Session Invalid**\n"
+                                f"👤 User: {chat_id}\n"
+                                f"📌 Reason: {error_msg[:100]}\n"
+                                f"⏰ Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+                            )
+                    except:
+                        pass
+                
+                # Clean up
+                try:
+                    if chat_id in active_userbots:
+                        await active_userbots[chat_id].disconnect()
+                        del active_userbots[chat_id]
+                except:
+                    pass
+                user_sessions.pop(chat_id, None)
+                await delete_session(chat_id)
+                break
+            
+            # ─── OTHER ERRORS ───
+            now = time.time()
+            
+            # Too many restarts in short time
+            if restart_count >= 5 and (now - last_restart_time) < 60:
+                print(f"⚠️ Too many restarts for user {chat_id} in short time. Waiting...")
+                try:
+                    await main_bot.send_message(chat_id, f"⚠️ **Userbot is having issues.**\n⏳ Waiting 60 seconds before retry...")
+                except:
+                    pass
+                await asyncio.sleep(60)
+                restart_count = 0
+            
+            restart_count += 1
+            last_restart_time = now
+            
+            print(f"⚠️ Userbot crashed: {error_msg[:100]}\nRestarting in 5 seconds... (Attempt {restart_count})")
+            
+            # Only send notification to user every 3 crashes
+            if restart_count % 3 == 1:
+                try:
+                    await main_bot.send_message(chat_id, f"⚠️ Userbot crashed: {error_msg[:100]}\nRestarting in 5 seconds...")
+                except:
+                    pass
+            
+            # Only send to owner every 5 crashes
+            if restart_count % 5 == 0:
+                try:
+                    for owner in MY_OWNER_IDS:
+                        await main_bot.send_message(owner, 
+                            f"🔄 **Userbot Restart**\n"
+                            f"👤 User: {chat_id}\n"
+                            f"📌 Reason: {error_msg[:80]}\n"
+                            f"🔢 Attempt: {restart_count}"
+                        )
+                except:
+                    pass
+            
             await asyncio.sleep(5)
 
 # ─── FULL USERBOT ENGINE ──────────────────────────────
