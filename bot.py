@@ -445,14 +445,14 @@ async def broadcast_cmd(event):
     await safe_reply(event, f"✅ Broadcast sent to {count} users.")
 
     @main_bot.on(events.NewMessage(pattern="/listusers"))
-async def listusers_cmd(event):
-    if event.sender_id not in MY_OWNER_IDS:
-        return
-    if not broadcast_users:
-        return await event.reply("📭 Koi user registered nahi hai.")
-    ids = "\n".join(f"• `{uid}`" for uid in sorted(broadcast_users))
-    await event.reply(f"👥 **Registered Users** ({len(broadcast_users)}):\n{ids}")
-    
+    async def listusers_cmd(event):
+        if event.sender_id not in MY_OWNER_IDS:
+            return
+        if not broadcast_users:
+            return await event.reply("📭 Koi user registered nahi hai.")
+        ids = "\n".join(f"• `{uid}`" for uid in sorted(broadcast_users))
+        await event.reply(f"👥 **Registered Users** ({len(broadcast_users)}):\n{ids}")
+
 # ─── LOGOUT COMMAND ───
 @main_bot.on(events.NewMessage(pattern="/logout"))
 async def logout_handler(event):
