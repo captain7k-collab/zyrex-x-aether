@@ -249,11 +249,11 @@ async def add_premium(user_id: int, days: int = 30, gifted_by: int = None):
     async with premium_pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO premium_users (user_id, expiry_date, gifted_by, premium_active, blocked_commands) "
-            "VALUES ($1, NOW() + INTERVAL '$2 days', $3, TRUE, '{}') "
-            "ON CONFLICT (user_id) DO UPDATE SET expiry_date = NOW() + INTERVAL '$2 days', gifted_by = $3, premium_active = TRUE",
+            "VALUES ($1, NOW() + INTERVAL '1 day' * $2, $3, TRUE, '{}') "
+            "ON CONFLICT (user_id) DO UPDATE SET expiry_date = NOW() + INTERVAL '1 day' * $2, "
+            "gifted_by = $3, premium_active = TRUE",
             user_id, days, gifted_by
         )
-
 async def toggle_premium(user_id: int) -> bool:
     async with premium_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT premium_active FROM premium_users WHERE user_id = $1", user_id)
