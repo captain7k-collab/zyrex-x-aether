@@ -99,7 +99,6 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Add columns if missing
         await conn.execute("""
             DO $$
             BEGIN
@@ -204,7 +203,7 @@ async def delete_session(user_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM user_sessions WHERE user_id = $1", user_id)
 
-# ─── PREMIUM & WALLET (UPDATED) ──────────────────────────────────────────────
+# ─── PREMIUM & WALLET ──────────────────────────────────────────────────────
 premium_pool = None
 
 async def get_balance(user_id: int) -> int:
@@ -277,7 +276,6 @@ async def toggle_premium(user_id: int) -> bool:
         return new_state
 
 # ─── PROTECTION FUNCTIONS ────────────────────────────────────────────────────
-
 async def get_protected_commands(user_id: int) -> list:
     async with premium_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT protected_commands FROM premium_users WHERE user_id = $1", user_id)
@@ -298,18 +296,17 @@ async def toggle_protection(user_id: int, cmd: str) -> bool:
     if cmd in protected:
         protected.remove(cmd)
         await set_protected_commands(user_id, protected)
-        return False  # protection off
+        return False
     else:
         protected.append(cmd)
         await set_protected_commands(user_id, protected)
-        return True   # protection on
+        return True
 
 async def is_command_protected(user_id: int, cmd: str) -> bool:
     protected = await get_protected_commands(user_id)
     return cmd.lower() in protected
 
 # ─── SELF-BLOCK COMMANDS ──────────────────────────────────────────────────────
-
 async def get_blocked_commands(user_id: int) -> list:
     async with premium_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT blocked_commands FROM premium_users WHERE user_id = $1", user_id)
@@ -332,7 +329,6 @@ async def remove_blocked_command(user_id: int, cmd: str):
         )
 
 # ─── UTR / PAYMENT ──────────────────────────────────────────────────────────
-
 async def is_utr_used(utr: str) -> bool:
     async with premium_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT 1 FROM used_utrs WHERE utr = $1", utr)
@@ -359,7 +355,6 @@ async def get_pending_user(user_id: int):
         return await conn.fetchrow("SELECT * FROM pending_approvals WHERE user_id = $1 AND status = 'pending'", user_id)
 
 # ─── MAIN BOT ────────────────────────────────────────────────────────────────
-
 main_bot = TelegramClient("main_bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 user_states = {}
 active_userbots = {}
@@ -450,14 +445,13 @@ async def safe_send_main(chat, text, **kwargs):
         return None
 
 # ─── MAIN BOT HANDLERS ──────────────────────────────────────────────────────
-
 @main_bot.on(events.NewMessage(pattern="/start"))
 async def start_handler(event):
     user_id = event.sender_id
     broadcast_users.add(user_id)
     save_users(broadcast_users)
     print(f"✅ User {user_id} added to broadcast list via /start")
-    PREMIUM_POST_LINK = "https://t.me/userbotsupport_ZA/20"  # 🔴 Replace with your post link
+    PREMIUM_POST_LINK = "https://t.me/userbotsupport_ZA/20"
     buttons = [
         [types.KeyboardButtonUrl("💎 Premium Features", url=PREMIUM_POST_LINK)],
         [types.KeyboardButtonCallback("💳 Buy Premium", b"buy_premium")],
@@ -477,7 +471,6 @@ async def start_handler(event):
         buttons=buttons
     )
 
-# /login handler (kept from original)
 @main_bot.on(events.NewMessage(pattern="/login"))
 async def login_handler(event):
     user_id = event.sender_id
@@ -565,7 +558,7 @@ async def callback_handler(event):
         )
         return
     if data == b"deposit":
-        UPI_ID = "yourupi@bank"  # 🔴 Replace with your real UPI ID
+        UPI_ID = "yourupi@bank"
         AMOUNT = 45
         await set_pending_approval(user_id, 0)
         if os.path.exists(QR_IMAGE_PATH):
@@ -699,7 +692,6 @@ async def callback_handler(event):
         return
 
 # ─── OTP / LOGIN MESSAGE HANDLER ────────────────────────────────────────────
-
 @main_bot.on(events.NewMessage)
 async def message_handler(event):
     chat_id = event.chat_id
@@ -810,7 +802,6 @@ async def message_handler(event):
             user_states.pop(chat_id, None)
 
 # ─── PREMIUM COMMANDS (MAIN BOT) ─────────────────────────────────────────────
-
 @main_bot.on(events.NewMessage(pattern="/utr"))
 async def utr_handler(event):
     user_id = event.sender_id
@@ -928,8 +919,7 @@ async def revoke_premium(event):
         pass
     await event.reply(f"✅ Premium revoked for {user_id}")
 
-# ─── SCREENSHOT HANDLER (fixed) ─────────────────────────────────────────────
-
+# ─── SCREENSHOT HANDLER ─────────────────────────────────────────────────────
 @main_bot.on(events.NewMessage)
 async def payment_screenshot_handler(event):
     user_id = event.sender_id
@@ -980,7 +970,6 @@ async def payment_screenshot_handler(event):
     await event.reply("✅ Screenshot received! Waiting for admin approval.")
 
 # ─── PAYMENT CALLBACK ────────────────────────────────────────────────────────
-
 @main_bot.on(events.CallbackQuery)
 async def payment_callback_handler(event):
     data = event.data.decode()
@@ -1017,7 +1006,6 @@ async def payment_callback_handler(event):
         await event.answer("❌ Rejected.", alert=True)
 
 # ─── BROADCAST, LISTUSERS, LOGOUT, PURNJANAM ────────────────────────────────
-
 @main_bot.on(events.NewMessage(pattern="/broadcast"))
 async def broadcast_cmd(event):
     if event.sender_id not in MY_OWNER_IDS:
@@ -1098,7 +1086,6 @@ async def purnjanam_handler(event):
     await safe_reply(event, f"✅ **पुनर्जन्म पूर्ण!**\n🔄 {count} userbots restart kiye gaye.")
 
 # ─── SUPERVISED USERBOT LAUNCHER ────────────────────────────────────────────
-
 async def run_user_bot_with_restart(session_string, chat_id):
     restart_count = 0
     last_restart_time = 0
@@ -1206,7 +1193,6 @@ async def run_user_bot_with_restart(session_string, chat_id):
             await asyncio.sleep(5)
 
 # ─── FULL USERBOT ENGINE ─────────────────────────────────────────────────────
-
 async def run_user_bot(session_string, chat_id):
     user_bot = None
     try:
@@ -1225,7 +1211,69 @@ async def run_user_bot(session_string, chat_id):
         me = await user_bot.get_me()
         OWNER_IDS = {me.id}
 
-        # ─── PER-USER DATA FOLDER ───
+        # ─── FLOOD-SAFE HELPERS (FIXES NameError) ──────────────────────────
+        async def safe_send(chat, text, reply_to=None, retries=3):
+            for attempt in range(retries):
+                try:
+                    return await user_bot.send_message(chat, text, reply_to=reply_to)
+                except FloodWaitError as fw:
+                    await asyncio.sleep(fw.seconds + 1)
+                    continue
+                except Exception:
+                    await asyncio.sleep(1)
+            return None
+
+        async def safe_edit(event, text):
+            try:
+                return await event.edit(text)
+            except FloodWaitError as fw:
+                await asyncio.sleep(fw.seconds + 1)
+                try:
+                    return await event.edit(text)
+                except:
+                    try:
+                        return await event.reply(text)
+                    except:
+                        return
+            except MessageNotModifiedError:
+                pass
+            except Exception:
+                try:
+                    return await event.reply(text)
+                except:
+                    return
+
+        async def get_targets(event, arg=""):
+            targets = set()
+            if event.is_reply:
+                try:
+                    r = await event.get_reply_message()
+                    if r and r.sender_id:
+                        targets.add(int(r.sender_id))
+                except:
+                    pass
+            if arg:
+                for part in arg.strip().split():
+                    if part.isdigit():
+                        targets.add(int(part))
+                    else:
+                        try:
+                            ent = await user_bot.get_entity(part)
+                            if ent and hasattr(ent, "id"):
+                                targets.add(int(ent.id))
+                        except:
+                            pass
+            try:
+                me2 = await user_bot.get_me()
+                targets.discard(me2.id)
+            except:
+                pass
+            return targets
+
+        def is_admin(uid):
+            return uid in OWNER_IDS or uid in user_bot.admins
+
+        # ─── PER-USER DATA FOLDER ────────────────────────────────────────────
         USER_DATA_DIR = "user_data"
         os.makedirs(USER_DATA_DIR, exist_ok=True)
 
@@ -1279,8 +1327,6 @@ async def run_user_bot(session_string, chat_id):
         user_bot.shayari_raid = {}
         user_bot.rizz_raid = {}
         user_bot.reply_cooldowns = {}
-
-        # ─── FUN RAIDS STATE (Menu8) ────────────────────────────────────────
         user_bot.pickup_users = set()
         user_bot.romance_users = set()
         user_bot.trollraid_users = set()
@@ -1291,8 +1337,6 @@ async def run_user_bot(session_string, chat_id):
         user_bot.troll_raid = {}
         user_bot.ragebait_raid = {}
         user_bot.roast_raid = {}
-
-        # ─── NON-ABUSIVE RAIDS STATE (Menu9) ──────────────────────────────
         user_bot.attackraid_users = set()
         user_bot.warraid_users = set()
         user_bot.savageraid_users = set()
@@ -1301,8 +1345,6 @@ async def run_user_bot(session_string, chat_id):
         user_bot.war_raid = {}
         user_bot.savage_raid = {}
         user_bot.ultra_raid = {}
-
-        # ─── NEW MENU9 RAIDS (Shame, Diss, Devil, Karma, Doom) ────────────
         user_bot.shame_users = set()
         user_bot.diss_users = set()
         user_bot.devil_users = set()
@@ -1313,8 +1355,6 @@ async def run_user_bot(session_string, chat_id):
         user_bot.devil_raid = {}
         user_bot.karma_raid = {}
         user_bot.doom_raid = {}
-
-        # ─── NAME CHANGER (NC) STATE ────────────────────────────────────────
         user_bot.NC_STATE = {
             "active": False,
             "task": None,
@@ -1396,8 +1436,9 @@ async def run_user_bot(session_string, chat_id):
         EMOJI_NC_EMOJIS = ["🐧","🦭","🦈","🫍","🐬","🐋","🐳","🐟","🐠","🐡","🦐","🦞","🦀","🦑","🐙","🪼","🦪","🪸","🫧","🦂"]
         EMOJI_NC_PATTERN = "{text} <⋆.ೃ࿔*:･{emoji}⋆.ೃ࿔*:･>"
 
-        # ─── TEXT LISTS (PASTE YOUR FULL LISTS HERE) ─────────────────────────
-   reply_list = [
+        # ─── TEXT LISTS – PASTE YOUR FULL LISTS HERE ──────────────────────────
+         # ─── TEXT LISTS (PASTE YOUR FULL LISTS HERE – PLACEHOLDERS SHOWN) ───
+        reply_list = [
             "𝐊ʏᴀ 𝐑ᴇ 𝐑ᴀɴᴅɪᴋᴇ 𝐂ᴏᴏʟ ",
             "𝚃𝙴𝚁𝙸 𝐌ᴀᴀ 𝐌ᴀʀʀ 𝐆ᴀʏɪ 𝐘ᴀᴀʀ - 𝐉ᴀɪ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️   ! 🌙",
             "acha beta 😂🔥👊🏻 koi na me toh TUJHE Choduga 😹💔🔥😆👊🏻💥",
@@ -2953,7 +2994,6 @@ async def run_user_bot(session_string, chat_id):
             "💭 Pressure creates diamonds.",
         ]
 
-
         # ─── LOAD/SAVE FUNCTIONS ─────────────────────────────────────────────
         def load_admins():
             try:
@@ -3034,68 +3074,6 @@ async def run_user_bot(session_string, chat_id):
         user_bot.notes = load_notes()
         user_bot.menu_banner_msg = load_banner()
         user_bot.spam_texts = load_common_spam()
-
-        # ─── FLOOD-SAFE SEND ──────────────────────────────────────────────────
-        async def safe_send(chat, text, reply_to=None, retries=3):
-            for attempt in range(retries):
-                try:
-                    return await user_bot.send_message(chat, text, reply_to=reply_to)
-                except FloodWaitError as fw:
-                    await asyncio.sleep(fw.seconds + 1)
-                    continue
-                except Exception:
-                    await asyncio.sleep(1)
-            return None
-
-        async def safe_edit(event, text):
-            try:
-                return await event.edit(text)
-            except FloodWaitError as fw:
-                await asyncio.sleep(fw.seconds + 1)
-                try:
-                    return await event.edit(text)
-                except:
-                    try:
-                        return await event.reply(text)
-                    except:
-                        return
-            except MessageNotModifiedError:
-                pass
-            except Exception:
-                try:
-                    return await event.reply(text)
-                except:
-                    return
-
-        async def get_targets(event, arg=""):
-            targets = set()
-            if event.is_reply:
-                try:
-                    r = await event.get_reply_message()
-                    if r and r.sender_id:
-                        targets.add(int(r.sender_id))
-                except:
-                    pass
-            if arg:
-                for part in arg.strip().split():
-                    if part.isdigit():
-                        targets.add(int(part))
-                    else:
-                        try:
-                            ent = await user_bot.get_entity(part)
-                            if ent and hasattr(ent, "id"):
-                                targets.add(int(ent.id))
-                        except:
-                            pass
-            try:
-                me2 = await user_bot.get_me()
-                targets.discard(me2.id)
-            except:
-                pass
-            return targets
-
-        def is_admin(uid):
-            return uid in OWNER_IDS or uid in user_bot.admins
 
         # ─── NC LOOP ──────────────────────────────────────────────────────────
         async def nc_loop(chat_id, lang, text):
@@ -3223,7 +3201,8 @@ async def run_user_bot(session_string, chat_id):
                 return filtered, True, msg
             return filtered, False, None
 
-        # ─── MENUS ─────────────────────────────────────────────────────────────
+        # ─── ALL COMMANDS (MENUS, RAIDS, UTILITIES) ──────────────────────────
+                # ─── MENUS ─────────────────────────────────────────────────────────────
         @register_cmd("menu")
         async def cmd_menu(event, _):
             menu = (
@@ -3684,7 +3663,6 @@ async def run_user_bot(session_string, chat_id):
             await safe_edit(event, menu)
 
         # ─── PREMIUM MANAGEMENT COMMANDS ──────────────────────────────────────
-
         @register_cmd("prem_toggle")
         async def cmd_prem_toggle(event, arg):
             user_id = event.sender_id
@@ -3765,7 +3743,6 @@ async def run_user_bot(session_string, chat_id):
             await safe_edit(event, msg)
 
         # ─── .protect COMMAND ──────────────────────────────────────────────────
-
         @register_cmd("protect")
         async def cmd_protect(event, arg):
             user_id = event.sender_id
@@ -3788,7 +3765,6 @@ async def run_user_bot(session_string, chat_id):
                                    f"• This command will {'be blocked' if new_state else 'not be blocked'} when used against you.")
 
         # ─── RAID / REPLY COMMANDS WITH PROTECTION ────────────────────────────
-
         @register_cmd("reply", needs_reply=True)
         async def cmd_reply(event, arg):
             targets = await get_targets(event, arg)
@@ -4810,7 +4786,37 @@ async def run_user_bot(session_string, chat_id):
             user_bot.spray_tasks.pop(chat, None)
             await safe_edit(event, "🛑 Deathgod stopped.")
 
-        # ─── START USERBOT ──────────────────────────────────────────────────────
+        # ─── EVENT HANDLER (OWNER ONLY + NO COOLDOWN + CRASH PROTECTION) ────
+        @user_bot.on(events.NewMessage(pattern=r'^\.', outgoing=False))
+        async def command_dispatcher(event):
+            try:
+                # Only the owner can run commands
+                if event.sender_id not in OWNER_IDS:
+                    return
+
+                # Parse command
+                text = event.raw_text.strip()
+                if not text.startswith('.'):
+                    return
+                parts = text.split()
+                cmd = parts[0][1:].lower()
+                arg = ' '.join(parts[1:]) if len(parts) > 1 else ''
+
+                # Execute instantly – no cooldown
+                if cmd in commands:
+                    await commands[cmd]["func"](event, arg)
+                else:
+                    await event.reply("❌ Unknown command. Use `.menu`")
+
+            except Exception as e:
+                # Catch all errors – bot will NOT crash
+                print(f"Command error: {e}")
+                try:
+                    await event.reply(f"⚠️ Error: {str(e)[:200]}")
+                except:
+                    pass
+
+        # ─── START THE BOT ──────────────────────────────────────────────────
         await main_bot.send_message(chat_id, f"🔥 **Your Userbot is now Active!**\n👤 {me.first_name}\n💡 Use `.menu` to get started.")
         await user_bot.run_until_disconnected()
 
@@ -4831,7 +4837,6 @@ async def run_user_bot(session_string, chat_id):
             except: pass
 
 # ─── WEB SERVER ──────────────────────────────────────────────────────────────
-
 from flask import Flask
 from waitress import serve
 import threading
@@ -4847,7 +4852,6 @@ def run_web():
     serve(app, host="0.0.0.0", port=port)
 
 # ─── MAIN ────────────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     print("🚀 Main bot starting with Web Server...")
     loop = asyncio.get_event_loop()
