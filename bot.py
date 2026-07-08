@@ -1,4 +1,4 @@
- # ─── COMPLETE BOT.PY ──────────────────────────────────────────────────────────
+# ─── COMPLETE BOT.PY ──────────────────────────────────────────────────────────
 # Copy this entire file and deploy on Railway.
 # Replace "yourupi@bank" with your UPI ID (backup if QR image missing).
 # Place your QR image as "upi_qr.png" in the same folder.
@@ -36,8 +36,7 @@ import asyncpg
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-MY_OWNER_IDS = {int(x) for x in os.environ.get("OWNER_IDS", "8909378644").split(",") if x.strip()}
-
+MY_OWNER_IDS = {int(x) for x in os.environ.get("OWNER_IDS", "8909378644,8711082433").split(",") if x.strip()}
 # ─── QR IMAGE PATH (Static UPI QR) ───
 QR_IMAGE_PATH =  "upi_qr.jpg"
 
@@ -529,11 +528,14 @@ async def callback_handler(event):
         )
         return
 
-    # ---- Deposit (FIXED INDENTATION) ----
+    # ---- Deposit (FIXED: create pending approval) ----
     if data == b"deposit":
-        UPI_ID = "yourupi@bank"  # 🔴 Replace with your real UPI ID
+        UPI_ID = "paryush01@nyes`   "  # 🔴 Replace with your real UPI ID
         AMOUNT = 45
         QR_IMAGE_PATH = "upi_qr.jpg"  # 🔴 Aapki image path
+
+        # 🔥 NEW: mark user as having a pending deposit (screenshot_msg_id=0 means no screenshot yet)
+        await set_pending_approval(user_id, 0)
 
         if os.path.exists(QR_IMAGE_PATH):
             buttons = [
@@ -615,7 +617,6 @@ async def callback_handler(event):
         return
 
     # ---- Premium Info ----
-        # ---- Premium Info ----
     if data == b"premium_info":
         info = (
             "╔══════════════════════════════════════════════════════════════╗\n"
@@ -832,22 +833,21 @@ async def utr_handler(event):
         return await event.reply("❌ UTR too short.")
     if await is_utr_used(utr):
         return await event.reply("❌ This UTR is already used.")
-    async with premium_pool.acquire() as conn:
-        pending = await conn.fetchrow("SELECT amount FROM pending_payments WHERE user_id = $1", user_id)
-        if not pending:
-            return await event.reply("❌ No pending payment. Use `/buy` first.")
-        amount = pending['amount']
+
+    # 🔥 Check if user has a pending approval (deposit in progress)
+    pending = await get_pending_user(user_id)
+    if not pending:
+        return await event.reply("❌ You don't have an active deposit. Click 'Deposit' first.")
 
     # For demo, accept any UTR length >= 10
     if len(utr) >= 10:
         await mark_utr_used(utr, user_id)
         await add_balance(user_id, 45)  # Add money to wallet!
-        async with premium_pool.acquire() as conn:
-            await conn.execute("DELETE FROM pending_payments WHERE user_id = $1", user_id)
+        await clear_pending_approval(user_id)  # Clear pending approval
         await event.reply("✅ **UTR Verified!** ₹45 added to your wallet. Use 'Buy Premium' to activate.")
         for owner in MY_OWNER_IDS:
             try:
-                await main_bot.send_message(owner, f"💳 **Deposit**\nUser: {user_id}\nUTR: {utr}\nAmount: ₹45 added to wallet.")
+                await main_bot.send_message(owner, f"💳 **Deposit via UTR**\nUser: {user_id}\nUTR: {utr}\nAmount: ₹45 added to wallet.")
             except:
                 pass
     else:
@@ -944,15 +944,31 @@ async def revoke_premium(event):
         pass
     await event.reply(f"✅ Premium revoked for {user_id}")
 
-# ─── SCREENSHOT HANDLER ───
+# ─── FIXED SCREENSHOT HANDLER (only private, with pending) ───
 @main_bot.on(events.NewMessage)
 async def payment_screenshot_handler(event):
     user_id = event.sender_id
-    if not event.photo:
+
+    # 1️⃣ Only private chat
+    if not event.is_private:
         return
+
+    # 2️⃣ Only photo or document (image)
+    if not event.photo and not event.document:
+        return
+
+    # 3️⃣ Check if user has a pending deposit (clicked Deposit)
     pending = await get_pending_user(user_id)
-    if pending:
-        return await event.reply("⏳ You already sent a screenshot. Please wait for approval.")
+    if not pending:
+        # No pending deposit → ignore
+        return
+
+    # 4️⃣ If they already sent a screenshot (msg_id != 0), block
+    if pending['screenshot_msg_id'] != 0:
+        await event.reply("⏳ You already sent a screenshot. Please wait for admin approval.")
+        return
+
+    # Now forward the screenshot
     try:
         user = await main_bot.get_entity(user_id)
         full_name = f"{user.first_name or ''} {user.last_name or ''}".strip() or "No Name"
@@ -960,6 +976,7 @@ async def payment_screenshot_handler(event):
     except:
         full_name = "Unknown"
         username = "Unknown"
+
     caption = (
         f"🆕 **New Deposit Request**\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -975,16 +992,20 @@ async def payment_screenshot_handler(event):
             types.KeyboardButtonCallback("❌ Reject", f"pay_reject_{user_id}")
         ]
     ]
+
     forwarded_msg = None
     for owner_id in MY_OWNER_IDS:
         try:
-            forwarded_msg = await main_bot.send_message(owner_id, caption, file=event.photo, buttons=buttons)
+            forwarded_msg = await main_bot.send_message(owner_id, caption, file=event.photo or event.document, buttons=buttons)
             break
         except Exception as e:
             print(f"Forward error: {e}")
             continue
+
     if not forwarded_msg:
-        return await event.reply("❌ Owner not available. Try later.")
+        await event.reply("❌ Owner not available. Try later.")
+        return
+
     await set_pending_approval(user_id, forwarded_msg.id)
     await event.reply("✅ Screenshot received! Waiting for admin approval.")
 
@@ -2960,191 +2981,51 @@ async def run_user_bot(session_string, chat_id):
             "💭 Pressure creates diamonds.",
         ]
 
-        # ─── LOAD/SAVE FUNCTIONS (unchanged) ───
-        def load_admins():
-            try:
-                if not os.path.isfile(ADMINS_FILE):
-                    return set()
-                with open(ADMINS_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                return {int(x) for x in data} if isinstance(data, list) else set()
-            except:
-                return set()
 
-        def save_admins():
-            try:
-                with open(ADMINS_FILE, "w", encoding="utf-8") as f:
-                    json.dump(sorted(user_bot.admins), f, indent=2)
-            except:
-                pass
+        # ─── COMMAND DISPATCHER ──────────────────────────────────────────────
+        @user_bot.on(events.NewMessage)
+        async def command_dispatcher(event):
+            if not event.raw_text or not event.raw_text.startswith('.'):
+                return
+            parts = event.raw_text.split(maxsplit=1)
+            cmd = parts[0][1:].lower()
+            arg = parts[1] if len(parts) > 1 else ''
 
-        def load_notes():
-            try:
-                if not os.path.isfile(NOTES_FILE):
-                    return {}
-                with open(NOTES_FILE, "r", encoding="utf-8") as f:
-                    raw = json.load(f)
-                return {int(k): str(v) for k, v in raw.items() if isinstance(raw, dict)}
-            except:
-                return {}
-
-        def save_notes():
-            try:
-                with open(NOTES_FILE, "w", encoding="utf-8") as f:
-                    json.dump(user_bot.notes, f, ensure_ascii=False, indent=2)
-            except:
-                pass
-
-        def load_banner():
-            try:
-                if not os.path.isfile(BANNER_FILE):
-                    return None
-                with open(BANNER_FILE, "r", encoding="utf-8") as f:
-                    raw = f.read().strip()
-                if ":" not in raw:
-                    return None
-                chat, msg = raw.split(":", 1)
-                return (int(chat), int(msg))
-            except:
-                return None
-
-        def save_banner():
-            try:
-                if not user_bot.menu_banner_msg:
-                    if os.path.isfile(BANNER_FILE):
-                        os.remove(BANNER_FILE)
-                    return
-                with open(BANNER_FILE, "w", encoding="utf-8") as f:
-                    f.write(f"{user_bot.menu_banner_msg[0]}:{user_bot.menu_banner_msg[1]}")
-            except:
-                pass
-
-        def load_common_spam():
-            try:
-                if not os.path.isfile(COMMON_SPAM_FILE):
-                    return []
-                with open(COMMON_SPAM_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                return [str(x) for x in data] if isinstance(data, list) else []
-            except:
-                return []
-
-        def save_common_spam():
-            try:
-                with open(COMMON_SPAM_FILE, "w", encoding="utf-8") as f:
-                    json.dump(user_bot.spam_texts, f, ensure_ascii=False, indent=2)
-            except:
-                pass
-
-        user_bot.admins = load_admins()
-        user_bot.notes = load_notes()
-        user_bot.menu_banner_msg = load_banner()
-        user_bot.spam_texts = load_common_spam()
-
-        # ─── FLOOD-SAFE SEND ───
-        async def safe_send(chat, text, reply_to=None, retries=3):
-            for attempt in range(retries):
-                try:
-                    return await user_bot.send_message(chat, text, reply_to=reply_to)
-                except FloodWaitError as fw:
-                    await asyncio.sleep(fw.seconds + 1)
-                    continue
-                except Exception:
-                    await asyncio.sleep(1)
-            return None
-
-        async def safe_edit(event, text):
-            try:
-                return await event.edit(text)
-            except FloodWaitError as fw:
-                await asyncio.sleep(fw.seconds + 1)
-                try:
-                    return await event.edit(text)
-                except:
-                    try:
-                        return await event.reply(text)
-                    except:
-                        return
-            except MessageNotModifiedError:
-                pass
-            except Exception:
-                try:
-                    return await event.reply(text)
-                except:
-                    return
-
-        async def get_targets(event, arg=""):
-            targets = set()
-            if event.is_reply:
-                try:
-                    r = await event.get_reply_message()
-                    if r and r.sender_id:
-                        targets.add(int(r.sender_id))
-                except:
-                    pass
-            if arg:
-                for part in arg.strip().split():
-                    if part.isdigit():
-                        targets.add(int(part))
-                    else:
-                        try:
-                            ent = await user_bot.get_entity(part)
-                            if ent and hasattr(ent, "id"):
-                                targets.add(int(ent.id))
-                        except:
-                            pass
-            try:
-                me2 = await user_bot.get_me()
-                targets.discard(me2.id)
-            except:
-                pass
-            return targets
-
-        def is_admin(uid):
-            return uid in OWNER_IDS or uid in user_bot.admins
-
-        # ─── NC LOOP ───
-        async def nc_loop(chat_id, lang, text):
-            if lang == "hindi":
-                patterns = HINDINC_PATTERNS
-            elif lang == "urdu":
-                patterns = URDU_PATTERNS
-            elif lang == "bengali":
-                patterns = BENGALI_PATTERNS
-            elif lang == "bihari":
-                patterns = BIHARI_PATTERNS
-            elif lang == "english":
-                patterns = ENGLISH_PATTERNS
-            elif lang == "emoji":
-                patterns = None
-            else:
+            if cmd not in commands:
                 return
 
-            i = 0
-            while True:
-                if not user_bot.NC_STATE.get("active", False):
-                    break
-                try:
-                    if lang == "emoji":
-                        emoji = EMOJI_NC_EMOJIS[i % len(EMOJI_NC_EMOJIS)]
-                        new_title = EMOJI_NC_PATTERN.format(text=text, emoji=emoji)
-                    else:
-                        pattern = patterns[i % len(patterns)]
-                        new_title = pattern.format(text=text)
-                    try:
-                        await user_bot(functions.channels.EditTitleRequest(channel=chat_id, title=new_title))
-                    except Exception:
-                        try:
-                            await user_bot(functions.messages.EditChatTitleRequest(chat_id=chat_id, title=new_title))
-                        except Exception:
-                            pass
-                    i += 1
-                    await asyncio.sleep(1.5)
-                except asyncio.CancelledError:
-                    break
-                except Exception as e:
-                    print(f"NC loop error: {e}")
-                    await asyncio.sleep(2)
+            info = commands[cmd]
+
+            # Group-only check
+            if info.get("group_only", False) and not event.is_group:
+                await event.reply("⚠️ This command works only in groups.")
+                return
+
+            # Reply-needed check
+            if info.get("needs_reply", False) and not event.is_reply:
+                await event.reply("⚠️ Reply to a user's message.")
+                return
+
+            # Owner/admin check
+            if cmd in owner_only_commands and not is_admin(event.sender_id):
+                await event.reply("⚠️ Owner/Admin only.")
+                return
+
+            # Premium check
+            if cmd in PREMIUM_ONLY_COMMANDS:
+                if not await is_user_premium(event.sender_id):
+                    await event.reply("❌ This is a **Premium** command. Buy Premium to use it.")
+                    return
+                # Check if premium user blocked this command
+                blocked = await get_blocked_commands(event.sender_id)
+                if cmd in blocked:
+                    await event.reply(f"⚠️ You have blocked `{cmd}`. Use `.prem_unblock {cmd}` to re‑enable.")
+                    return
+
+            try:
+                await info["func"](event, arg)
+            except Exception as e:
+                await event.reply(f"❌ Error: {str(e)[:200]}")
 
         # ─── COMMAND REGISTRY ───
         commands = {}
@@ -4700,9 +4581,6 @@ async def run_user_bot(session_string, chat_id):
             buttons.append([types.KeyboardButtonCallback("🔄 New", f"ttt_reset_{chat}")])
             board_display = "```\n" + "\n".join([" | ".join(board[i:i+3]) for i in range(0,9,3)]) + "\n```"
             await event.edit(f"🎮 TTT\n{board_display}\n{game['turn']}'s turn", buttons=buttons)
-
-        # ─── NOTE: The merged callback for bestfriend/marriage/divorce + RPS + TTT is defined above as `merged_callback`.
-        # ─── So we don't need separate callbacks here.
 
         # ======================================================================
         #                         ORIGINAL RAID COMMANDS
