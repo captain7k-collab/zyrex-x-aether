@@ -401,7 +401,6 @@ async def safe_send_main(chat, text, **kwargs):
 
 # ─── MAIN BOT HANDLERS ───
 
-# UPDATED /start with inline buttons
 @main_bot.on(events.NewMessage(pattern="/start"))
 async def start_handler(event):
     user_id = event.sender_id
@@ -409,7 +408,11 @@ async def start_handler(event):
     save_users(broadcast_users)
     print(f"✅ User {user_id} added to broadcast list via /start")
 
+    # 🔥 PREMIUM FEATURES POST LINK – Yahan apna link daalein
+    PREMIUM_POST_LINK = "https://t.me/userbotsupport_ZA/20"  # 🔴 Replace with your post link
+
     buttons = [
+        [types.KeyboardButtonUrl("💎 Premium Features", url=PREMIUM_POST_LINK)],  # 🔥 NEW BUTTON
         [types.KeyboardButtonCallback("💳 Buy Premium", b"buy_premium")],
         [types.KeyboardButtonCallback("💰 Balance", b"check_balance")],
         [types.KeyboardButtonCallback("📤 Deposit", b"deposit")]
@@ -461,7 +464,7 @@ async def callback_handler(event):
     data = event.data
     user_id = event.sender_id
 
-    # Channel verification
+    # ---- Channel Verification ----
     if data == b"verify_channels":
         chat_id = event.chat_id
         not_joined = []
@@ -494,7 +497,7 @@ async def callback_handler(event):
             await event.answer("Verified! Now send your number.")
         return
 
-    # Wallet / Premium callbacks
+    # ---- Check Balance ----
     if data == b"check_balance":
         balance = await get_balance(user_id)
         await event.answer(f"💰 Your balance: ₹{balance}", alert=True)
@@ -506,6 +509,7 @@ async def callback_handler(event):
         await event.edit(f"💰 **Your Balance:** ₹{balance}\n\nPremium costs ₹45/month.", buttons=buttons)
         return
 
+    # ---- Back to Start ----
     if data == b"back_to_start":
         buttons = [
             [types.KeyboardButtonCallback("💳 Buy Premium", b"buy_premium")],
@@ -524,56 +528,53 @@ async def callback_handler(event):
             buttons=buttons
         )
         return
-       if data == b"deposit":
-        UPI_ID = "yourupi@bank"  # 🔴 Apna real UPI ID
+
+    # ---- Deposit (FIXED INDENTATION) ----
+    if data == b"deposit":
+        UPI_ID = "yourupi@bank"  # 🔴 Replace with your real UPI ID
         AMOUNT = 45
         QR_IMAGE_PATH = "upi_qr.jpg"  # 🔴 Aapki image path
 
-        try:
-            if os.path.exists(QR_IMAGE_PATH):
-                buttons = [
-                    [types.KeyboardButtonCallback("🔙 Back", b"back_to_start")]
-                ]
-                await event.edit(
-                    f"📤 **Deposit Instructions**\n\n"
-                    f"💳 UPI ID: `{UPI_ID}`\n"
-                    f"💵 Amount: ₹{AMOUNT}\n\n"
-                    "⬇️ Scan the QR code below or pay to the UPI ID above.\n"
-                    "After payment, send the **UTR** or **Screenshot** here.\n\n"
-                    "📌 Type `/utr <your_utr>` to send UTR.\n"
-                    "📸 Or just send the payment screenshot directly.",
-                    buttons=buttons,
-                    file=QR_IMAGE_PATH
-                )
-            else:
-                # Fallback: Generate QR code dynamically
-                upi_link = f"upi://pay?pa={UPI_ID}&pn=YourBotName&am={AMOUNT}&cu=INR"
-                qr = qrcode.make(upi_link)
-                qr_bytes = BytesIO()
-                qr.save(qr_bytes, format='PNG')
-                qr_bytes.seek(0)
-                buttons = [
-                    [types.KeyboardButtonCallback("🔙 Back", b"back_to_start")]
-                ]
-                await event.edit(
-                    f"📤 **Deposit Instructions**\n\n"
-                    f"💳 UPI ID: `{UPI_ID}`\n"
-                    f"💵 Amount: ₹{AMOUNT}\n\n"
-                    "Scan the QR code or pay to the UPI ID above.\n"
-                    "After payment, send the **UTR** or **Screenshot** here.\n\n"
-                    "📌 Type `/utr <your_utr>` to send UTR.\n"
-                    "📸 Or just send the payment screenshot directly.",
-                    file=qr_bytes,
-                    buttons=buttons
-                )
-            await event.answer("✅ Deposit instructions sent!", alert=True)
-        except Exception as e:
-            print(f"Deposit error: {e}")
-            await event.answer("❌ Error loading deposit. Check logs.", alert=True)
+        if os.path.exists(QR_IMAGE_PATH):
+            buttons = [
+                [types.KeyboardButtonCallback("🔙 Back", b"back_to_start")]
+            ]
+            await event.edit(
+                f"📤 **Deposit Instructions**\n\n"
+                f"💳 UPI ID: `{UPI_ID}`\n"
+                f"💵 Amount: ₹{AMOUNT}\n\n"
+                "⬇️ Scan the QR code below or pay to the UPI ID above.\n"
+                "After payment, send the **UTR** or **Screenshot** here.\n\n"
+                "📌 Type `/utr <your_utr>` to send UTR.\n"
+                "📸 Or just send the payment screenshot directly.",
+                buttons=buttons,
+                file=QR_IMAGE_PATH
+            )
+        else:
+            # Fallback: Generate QR code dynamically
+            upi_link = f"upi://pay?pa={UPI_ID}&pn=YourBotName&am={AMOUNT}&cu=INR"
+            qr = qrcode.make(upi_link)
+            qr_bytes = BytesIO()
+            qr.save(qr_bytes, format='PNG')
+            qr_bytes.seek(0)
+            buttons = [
+                [types.KeyboardButtonCallback("🔙 Back", b"back_to_start")]
+            ]
+            await event.edit(
+                f"📤 **Deposit Instructions**\n\n"
+                f"💳 UPI ID: `{UPI_ID}`\n"
+                f"💵 Amount: ₹{AMOUNT}\n\n"
+                "Scan the QR code or pay to the UPI ID above.\n"
+                "After payment, send the **UTR** or **Screenshot** here.\n\n"
+                "📌 Type `/utr <your_utr>` to send UTR.\n"
+                "📸 Or just send the payment screenshot directly.",
+                file=qr_bytes,
+                buttons=buttons
+            )
         return
 
+    # ---- Buy Premium ----
     if data == b"buy_premium":
-        # 1. Check if already premium
         if await is_user_premium(user_id):
             buttons = [
                 [types.KeyboardButtonCallback("💰 Balance", b"check_balance")],
@@ -583,10 +584,8 @@ async def callback_handler(event):
             await event.answer("Already premium!", alert=True)
             return
 
-        # 2. Check balance
         balance = await get_balance(user_id)
         if balance >= 45:
-            # Deduct balance and activate premium
             await deduct_balance(user_id, 45)
             await add_premium(user_id, days=30)
             await event.answer("✅ Premium activated!", alert=True)
@@ -601,7 +600,6 @@ async def callback_handler(event):
                 buttons=buttons
             )
         else:
-            # Insufficient balance
             await event.answer("❌ Insufficient balance!", alert=True)
             buttons = [
                 [types.KeyboardButtonCallback("📤 Deposit ₹45", b"deposit")],
@@ -614,6 +612,86 @@ async def callback_handler(event):
                 "Please deposit money to your wallet first.",
                 buttons=buttons
             )
+        return
+
+    # ---- Premium Info ----
+        # ---- Premium Info ----
+    if data == b"premium_info":
+        info = (
+            "╔══════════════════════════════════════════════════════════════╗\n"
+            "║          ✦ 💎 𝐏𝐑𝐄𝐌𝐈𝐔𝐌 𝐔𝐍𝐋𝐎𝐂𝐊𝐄𝐃 💎 ✦                ║\n"
+            "║          ⚡️𝐙𝐘𝐑Σ𝐗 ✕ ΛΣƬΉΣЯ⚡️  𝐔𝐒𝐄𝐑𝐁𝐎𝐓                    ║\n"
+            "╚══════════════════════════════════════════════════════════════╝\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "💰 **Price:** ₹45 / month (30 days)\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "🔥 𝐖𝐇𝐀𝐓 𝐘𝐎𝐔 𝐆𝐄𝐓 𝐖𝐈𝐓𝐇 𝐏𝐑𝐄𝐌𝐈𝐔𝐌 🔥\n\n"
+            "┌───〔 ✨ 𝐓𝐄𝐗𝐓 𝐄𝐅𝐅𝐄𝐂𝐓𝐒 & 𝐓𝐘𝐏𝐈𝐍𝐆 〕───┐\n"
+            "│  • `.typing` – Animated word-by-word typing effect       │\n"
+            "│  • `.encrypt` / `.decrypt` – Base64 encryption           │\n"
+            "│  • `.sha1` / `.sha512` – Advanced hash generation        │\n"
+            "└───────────────────────────────────────────────────────────┘\n\n"
+            "┌───〔 🎨 𝐓𝐄𝐗𝐓 𝐒𝐓𝐘𝐋𝐈𝐍𝐆 〕───┐\n"
+            "│  • `.boxtext`, `.bubble`, `.strike`, `.spoiler`          │\n"
+            "│  • `.mirror`, `.flip_text`, `.tinytext`, `.square_text`  │\n"
+            "│  • `.clap`, `.snake`, `.shout`, `.mock`, `.alternating`  │\n"
+            "│  • `.spaceit`, `.removespaces`, `.titlecase`             │\n"
+            "└───────────────────────────────────────────────────────────┘\n\n"
+            "┌───〔 🔢 𝐌𝐀𝐓𝐇 & 𝐔𝐓𝐈𝐋𝐈𝐓𝐈𝐄𝐒 〕───┐\n"
+            "│  • `.octal`, `.bmi`, `.age`, `.prime`, `.factorial`      │\n"
+            "│  • `.fibonacci`, `.square`, `.roman`, `.table`           │\n"
+            "│  • `.percentage`, `.countdown`, `.ascii`, `.nato`        │\n"
+            "└───────────────────────────────────────────────────────────┘\n\n"
+            "┌───〔 📝 𝐓𝐄𝐗𝐓 𝐀𝐍𝐀𝐋𝐘𝐒𝐈𝐒 〕───┐\n"
+            "│  • `.palindrome`, `.vowels`, `.wordfreq`, `.charcount`   │\n"
+            "│  • `.lettercount`, `.charinfo`, `.wordgame`, `.emoji2text`│\n"
+            "└───────────────────────────────────────────────────────────┘\n\n"
+            "┌───〔 ⚔️ 𝐏𝐑𝐄𝐌𝐈𝐔𝐌 𝐑𝐀𝐈𝐃𝐒 & 𝐒𝐏𝐀𝐌 〕───┐\n"
+            "│  • `.customraid` – Custom text raid (unlimited)          │\n"
+            "│  • `.multispray` – Rotate all saved texts                │\n"
+            "│  • `.addtext`, `.edittext`, `.deltext` – Full text mgr   │\n"
+            "│  • `.listtexts`, `.tspray`, `.rspray`, `.countspray`     │\n"
+            "│  • `.spraydelay` – Adjust spam speed                     │\n"
+            "└───────────────────────────────────────────────────────────┘\n\n"
+            "┌───〔 🛡 𝐏𝐑𝐄𝐌𝐈𝐔𝐌 𝐌𝐀𝐍𝐀𝐆𝐄𝐌𝐄𝐍𝐓 〕───┐\n"
+            "│  • `.prem_toggle` – Turn Premium ON/OFF anytime          │\n"
+            "│  • `.prem_block` – Block any command you don't use      │\n"
+            "│  • `.prem_unblock` – Unblock commands anytime            │\n"
+            "│  • `.prem_status` – Check expiry & blocked commands     │\n"
+            "│  • `.premcmds` – List all premium commands              │\n"
+            "└───────────────────────────────────────────────────────────┘\n\n"
+            "┌───〔 🛡 𝐏𝐑𝐎𝐓𝐄𝐂𝐓𝐈𝐎𝐍 𝐁𝐎𝐍𝐔𝐒 〕───┐\n"
+            "│  • No one can mute / kick / raid you                     │\n"
+            "│  • Full admin protection in all groups                   │\n"
+            "└───────────────────────────────────────────────────────────┘\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "💡 𝐇𝐎𝐖 𝐓𝐎 𝐁𝐔𝐘 𝐏𝐑𝐄𝐌𝐈𝐔𝐌?\n\n"
+            "1️⃣ Open @zyrex_x_aetherbot and type /start\n"
+            "2️⃣ Click `Deposit` button\n"
+            "3️⃣ Pay ₹45 via UPI QR Code\n"
+            "4️⃣ Send UTR number or Screenshot\n"
+            "5️⃣ Wait for owner approval\n"
+            "6️⃣ Click `Buy Premium` – Active! 🚀\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "🎯 𝐖𝐇𝐘 𝐂𝐇𝐎𝐎𝐒𝐄 𝐏𝐑𝐄𝐌𝐈𝐔𝐌?\n\n"
+            "✅ 50+ exclusive premium commands\n"
+            "✅ Full text management system\n"
+            "✅ Animated typing effects\n"
+            "✅ Advanced text styling\n"
+            "✅ Complete protection\n"
+            "✅ Premium ON/OFF toggle\n"
+            "✅ Block unwanted commands\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "💎 𝐔𝐧𝐥𝐨𝐜𝐤 𝐭𝐡𝐞 𝐔𝐥𝐭𝐢𝐦𝐚𝐭𝐞 𝐏𝐨𝐰𝐞𝐫. 𝐆𝐞𝐭 𝐏𝐫𝐞𝐦𝐢𝐮𝐦 𝐓𝐨𝐝𝐚𝐲! 🚀\n\n"
+            "👑 ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        )
+        buttons = [
+            [types.KeyboardButtonCallback("🔙 Back to Start", b"back_to_start")]
+        ]
+        await event.edit(info, buttons=buttons)
+        await event.answer("📋 Premium Features", alert=True)
+        return
 
 # ─── OTP / LOGIN MESSAGE HANDLER (keep original) ───
 @main_bot.on(events.NewMessage)
