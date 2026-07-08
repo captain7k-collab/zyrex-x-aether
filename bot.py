@@ -27,10 +27,13 @@ import qrcode
 from gtts import gTTS
 import yt_dlp
 from telethon import TelegramClient, events, functions, types
-from telethon.errors import FloodWaitError, RPCError, SessionPasswordNeededError, MessageNotModifiedError, UnauthorizedError
+from telethon.errors import FloodWaitError, RPCError, SessionPasswordNeededError, MessageNotModifiedError, UnauthorizedError, AuthKeyUnregisteredError  # ✅ Added
 from telethon.sessions import StringSession
 from cryptography.fernet import Fernet
 import asyncpg
+
+# ─── SUPPRESS TELEHON WARNINGS ───
+logging.getLogger("telethon").setLevel(logging.ERROR)
 
 # ─── CONFIGURATION ───
 API_ID = int(os.environ.get("API_ID", 0))
@@ -323,6 +326,9 @@ async def is_user_in_channel(user_id, channel_data):
         channel = await main_bot.get_entity(channel_data["id"])
         await main_bot.get_permissions(channel, user_id)
         return True
+    except (RPCError, ValueError, TypeError, AuthKeyUnregisteredError) as e:
+        print(f"⚠️ Channel check failed for {channel_data.get('name')}: {e}")
+        return False
     except Exception:
         return False
 
