@@ -6502,7 +6502,7 @@ async def cmd_spraydelay(event, arg):
             reason = user_bot.afk_data.get("reason", "I'm AFK")
             await safe_send(event.chat_id, f"🚫 I'm currently AFK. Reason: {reason}", reply_to=event.id)
 
-              # ─── START USERBOT ───
+           # ─── START USERBOT ───
         await main_bot.send_message(chat_id, f"🔥 **Your Userbot is now Active!**\n👤 {me.first_name}\n💡 Use `.menu` to get started.")
         await user_bot.run_until_disconnected()
 
