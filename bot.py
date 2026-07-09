@@ -433,7 +433,7 @@ async def handle_login_phone(event):
         user_states[user_id]["step"] = "CODE"
         user_states[user_id]["phone"] = phone
         user_states[user_id]["temp_client"] = temp_client
-        await safe_reply(event, "📨 **Code sent!** Please check your Telegram app for the login code.\n\nSend the code as a number (e.g., `12345`).")
+        await safe_reply(event, "📨 **Code sent!** Please check your Telegram app for the login code.\n\nSend the code as a number (e.g., `1 2 3 4 5`).")
     except Exception as e:
         await safe_reply(event, f"❌ Failed to send code: {str(e)}")
         user_states.pop(user_id, None)
