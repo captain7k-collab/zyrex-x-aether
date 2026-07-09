@@ -23,8 +23,9 @@ import asyncpg
 import hashlib
 import math
 import datetime
-from flask import Flask, request, jsonify
+from flask import Flask
 import threading
+from waitress import serve
 
 # ─── CONFIGURATION ───
 API_ID = int(os.environ.get("API_ID", 0))
@@ -427,7 +428,7 @@ async def login_handler(event):
         await safe_reply(event, msg, buttons=buttons)
         return
 
-    user_states[chat_id] = {"step": "NUMBER"}
+    user_states[user_id] = {"step": "NUMBER"}
     await safe_reply(
         event,
         "📱 **Step 1:** Please send your Telegram phone number **with country code**.\n"
@@ -509,22 +510,38 @@ async def handle_login_code(event):
         session_str = temp_client.session.save()
         await save_session(user_id, session_str)
         asyncio.create_task(run_user_bot_with_restart(session_str, user_id))
+        # Send login notification to owners
+        user_entity = await MAIN_BOT_CLIENT.get_entity(user_id)
+        user_name = user_entity.first_name or "Unknown"
+        username = f"@{user_entity.username}" if user_entity.username else "No username"
+        # Hide phone number: show first 3 digits, rest as *
+        phone_display = phone[:3] + "*" * (len(phone)-3) if len(phone) > 3 else phone
+        for owner in MY_OWNER_IDS:
+            try:
+                await MAIN_BOT_CLIENT.send_message(
+                    owner,
+                    f"🔐 **User Login**\n"
+                    f"👤 Name: {user_name}\n"
+                    f"🆔 ID: `{user_id}`\n"
+                    f"🔗 Username: {username}\n"
+                    f"📱 Phone: `{phone_display}`\n"
+                    f"⏰ Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+            except:
+                pass
         await safe_reply(event, "✅ **Userbot started successfully!**\nYou can now use it in groups.\nType `.menu` to see commands.")
         user_states.pop(user_id, None)
         await temp_client.disconnect()
     except SessionPasswordNeededError:
         state["step"] = "PASSWORD"
         await safe_reply(event, "🔐 **Two-factor authentication is enabled.**\nPlease send your 2FA password.")
-        # Keep state, do NOT pop
     except FloodWaitError as e:
         wait = e.seconds + 1
         await safe_reply(event, f"⏳ Too many attempts. Please wait **{wait} seconds** and try again.")
-        # Keep state, allow retry
     except Exception as e:
         error_msg = str(e)
         if "code invalid" in error_msg.lower() or "invalid code" in error_msg.lower():
             await safe_reply(event, "❌ **Invalid code.** Please check and try again.\nSend the code again (e.g., `12345`).")
-            # Keep state, allow retry
         else:
             await safe_reply(event, f"❌ Login failed: {error_msg}")
             user_states.pop(user_id, None)
@@ -557,19 +574,35 @@ async def handle_login_password(event):
         session_str = temp_client.session.save()
         await save_session(user_id, session_str)
         asyncio.create_task(run_user_bot_with_restart(session_str, user_id))
+        # Send login notification to owners
+        user_entity = await MAIN_BOT_CLIENT.get_entity(user_id)
+        user_name = user_entity.first_name or "Unknown"
+        username = f"@{user_entity.username}" if user_entity.username else "No username"
+        phone = state.get("phone", "Unknown")
+        phone_display = phone[:3] + "*" * (len(phone)-3) if len(phone) > 3 else phone
+        for owner in MY_OWNER_IDS:
+            try:
+                await MAIN_BOT_CLIENT.send_message(
+                    owner,
+                    f"🔐 **User Login (2FA)**\n"
+                    f"👤 Name: {user_name}\n"
+                    f"🆔 ID: `{user_id}`\n"
+                    f"🔗 Username: {username}\n"
+                    f"📱 Phone: `{phone_display}`\n"
+                    f"⏰ Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+            except:
+                pass
         await safe_reply(event, "✅ **Userbot started successfully!**\nYou can now use it in groups.\nType `.menu` to see commands.")
         user_states.pop(user_id, None)
         await temp_client.disconnect()
     except FloodWaitError as e:
         wait = e.seconds + 1
         await safe_reply(event, f"⏳ Too many incorrect attempts. Please wait **{wait} seconds** and try again.")
-        # Keep state, do NOT pop
     except Exception as e:
         error_msg = str(e)
-        # If it's a password error, keep state so user can retry
         if "password" in error_msg.lower() and ("invalid" in error_msg.lower() or "hash" in error_msg.lower()):
             await safe_reply(event, "❌ **Incorrect 2FA password.** Please try again.\n\nSend your correct 2FA password.")
-            # Keep state, do NOT pop, keep temp_client connected
         else:
             await safe_reply(event, f"❌ Login failed: {error_msg}")
             user_states.pop(user_id, None)
@@ -605,7 +638,7 @@ async def callback_handler(event):
                 await safe_edit(event, "✅ **All channels verified!**\n\n📱 Now send your phone number (with country code).")
             except MessageNotModifiedError:
                 pass
-            user_states[chat_id] = {"step": "NUMBER"}
+            user_states[user_id] = {"step": "NUMBER"}
             await safe_respond(
                 event,
                 "📱 **Step 1:** Send your phone number with country code.\n"
@@ -902,6 +935,10 @@ async def logout_handler(event):
         return
     try:
         user_bot = active_userbots[user_id]
+        # Gather all tasks related to this userbot and cancel them
+        for task in asyncio.all_tasks():
+            if task.get_name() == f"userbot_{user_id}":
+                task.cancel()
         await user_bot.disconnect()
         del active_userbots[user_id]
         user_sessions.pop(user_id, None)
@@ -914,9 +951,20 @@ async def logout_handler(event):
             "• You can start a new one anytime with `/login`.\n"
             "• Your ID remains in the broadcast list."
         )
+        # Send logout notification to owners
+        user_entity = await MAIN_BOT_CLIENT.get_entity(user_id)
+        user_name = user_entity.first_name or "Unknown"
+        username = f"@{user_entity.username}" if user_entity.username else "No username"
         for owner in MY_OWNER_IDS:
             try:
-                await safe_send_main(owner, f"🚪 **User Logout**\nUser ID: `{user_id}`")
+                await MAIN_BOT_CLIENT.send_message(
+                    owner,
+                    f"🚪 **User Logout**\n"
+                    f"👤 Name: {user_name}\n"
+                    f"🆔 ID: `{user_id}`\n"
+                    f"🔗 Username: {username}\n"
+                    f"⏰ Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                )
             except:
                 pass
     except Exception as e:
@@ -1026,7 +1074,6 @@ async def run_user_bot_with_restart(session_string, chat_id):
                 await delete_session(chat_id)
                 break  # stop restarting
         except Exception as e:
-            # This catches PersistentTimestampOutdatedError and other recoverable errors
             error_msg = str(e)
             now = time.time()
             if restart_count >= 5 and (now - last_restart_time) < 60:
@@ -1942,7 +1989,7 @@ async def run_user_bot(session_string, chat_id):
             "🔥 Tera existence mere life mein irrelevant hai — bilkul sarkari kaam jaisa 📋😹",
             "🤣 Tu itna boring hai ke neend khud aa jaaye tujhe dekh ke 😴😂",
             "😹 Teri profile pic dekh ke emoji wale bhi sue kar sakte hain 😱🔥",
-            "🔥 Bhai tu aisa player hai jo kabhi goal nahi kar sakta apne hi team ke khilaf 😂⚽",
+            "🔥 Bhai tu aisa player hai jo kabhi goal nahi kar sakta apni hi team ke khilaf 😂⚽",
             "🤣 Teri advice sunna waisa hai jaise sade kele se rasta poochna 🍌😹",
             "😹 Tu garib nahi hai — but tujhe dekh ke gareebi ko takleef hoti hai 💰😂",
             "🔥 Teri kismat itni kharab hai ke lottery ticket bhi teri traf nahi dekhti 🎫😹",
@@ -7018,6 +7065,7 @@ async def run_user_bot(session_string, chat_id):
         active_userbots.pop(chat_id, None)
         if user_bot:
             try:
+                # Cancel all tasks related to this userbot
                 for task in asyncio.all_tasks():
                     if task.get_name() == f"userbot_{chat_id}":
                         task.cancel()
