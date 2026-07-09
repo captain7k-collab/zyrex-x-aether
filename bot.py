@@ -1037,6 +1037,1098 @@ async def run_user_bot_with_restart(session_string, chat_id):
                 except:
                     pass
             await asyncio.sleep(5)
+
+# ─── USERBOT ENGINE (UNCHANGED - SHORTENED FOR BREVITY) ──────
+# [The entire run_user_bot function remains exactly as in your original code.
+#  Place it here without any changes. For completeness, I'll include a placeholder.]
+# (Your existing userbot engine with all commands goes here – 
+#  it is too long to repeat, but you must paste it unchanged.)
+
+# ─── WEB SERVER ──────────────────────────────────────────────
+app = Flask(__name__)
+@app.route('/')
+def home():
+    return "✅ Userbot is running!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 5000))
+    from waitress import serve
+    serve(app, host="0.0.0.0", port=port)
+
+# ─── MAIN ──────────────────────────────────────────────────────
+async def main():
+    print("🚀 Starting bot...")
+    await init_db()
+    await init_cipher()
+
+    sessions = await load_sessions()
+    for uid, sess
+This response is AI-generated, for reference only.
+Ye dekho ye asie nhi ana chiye isse thik krke code bhejo
+The issue is that your bot is catching all messages (including /login commands) in the handle_login_phone handler because it's triggered by any message. We need to fix the message handlers to properly distinguish between commands and user input.
+
+Here's the fixed code with proper message handling:
+
+python
+import asyncio
+import os
+import time
+import json
+import random
+import logging
+import traceback
+import re
+import glob
+import signal
+import sys
+from typing import Dict, Set, Optional
+from io import BytesIO
+import requests
+import qrcode
+from gtts import gTTS
+import yt_dlp
+from telethon import TelegramClient, events, functions, types
+from telethon.errors import FloodWaitError, RPCError, SessionPasswordNeededError, MessageNotModifiedError, UnauthorizedError
+from telethon.sessions import StringSession
+from cryptography.fernet import Fernet
+import asyncpg
+import hashlib
+import math
+import datetime
+from flask import Flask, request, jsonify
+import threading
+
+# ─── CONFIGURATION ───
+API_ID = int(os.environ.get("API_ID", 0))
+API_HASH = os.environ.get("API_HASH", "")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+MY_OWNER_IDS = {int(x) for x in os.environ.get("OWNER_IDS", "8909378644,8711082433").split(",") if x.strip()}
+UPI_ID = os.environ.get("UPI_ID", "paryush01@nyes")
+QR_IMAGE_PATH = os.environ.get("QR_IMAGE_PATH", "upi_qr.jpg")
+PREMIUM_FEATURES_LINK = os.environ.get("PREMIUM_FEATURES_LINK", "https://t.me/userbotsupport_ZA/20")
+
+# ─── CHANNEL VERIFICATION ───
+REQUIRED_CHANNELS = [
+    {"id": -1003896742623, "invite": "https://t.me/+slCWwd6XmSc5OTU9", "name": "Channel 1"},
+    {"id": -1003971062167, "invite": "https://t.me/botscripts18", "name": "Channel 2"},
+    {"id": -1004452969098, "invite": "https://t.me/userbotsupport_ZA", "name": "Channel 3"},
+]
+
+USERS_FILE = "broadcast_users.json"
+
+def load_users():
+    try:
+        with open(USERS_FILE, "r") as f:
+            return set(json.load(f))
+    except:
+        return set()
+
+def save_users(users):
+    with open(USERS_FILE, "w") as f:
+        json.dump(list(users), f)
+
+broadcast_users = load_users()
+
+# ─── DATABASE & ENCRYPTION ───
+db_pool = None
+cipher = None
+
+async def init_db():
+    global db_pool
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        raise Exception("DATABASE_URL not set")
+    db_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=5)
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                user_id BIGINT PRIMARY KEY,
+                session_encrypted TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS app_config (
+                key_name TEXT PRIMARY KEY,
+                key_value TEXT NOT NULL
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS premium_users (
+                user_id BIGINT PRIMARY KEY,
+                plan TEXT NOT NULL,
+                start_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expiry_date TIMESTAMP,
+                status TEXT DEFAULT 'active'
+            )
+        """)
+        await conn.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name='premium_users' AND column_name='plan') THEN
+                    ALTER TABLE premium_users ADD COLUMN plan TEXT NOT NULL DEFAULT 'monthly';
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name='premium_users' AND column_name='start_date') THEN
+                    ALTER TABLE premium_users ADD COLUMN start_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name='premium_users' AND column_name='expiry_date') THEN
+                    ALTER TABLE premium_users ADD COLUMN expiry_date TIMESTAMP;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name='premium_users' AND column_name='status') THEN
+                    ALTER TABLE premium_users ADD COLUMN status TEXT DEFAULT 'active';
+                END IF;
+            END $$;
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS premium_protections (
+                user_id BIGINT,
+                command_name TEXT,
+                PRIMARY KEY (user_id, command_name)
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_wallet (
+                user_id BIGINT PRIMARY KEY,
+                balance DECIMAL(10,2) DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+async def get_encryption_key():
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT key_value FROM app_config WHERE key_name = 'encryption_key'")
+        if row:
+            return row['key_value']
+        else:
+            new_key = Fernet.generate_key().decode()
+            await conn.execute("INSERT INTO app_config (key_name, key_value) VALUES ($1, $2)", "encryption_key", new_key)
+            return new_key
+
+async def init_cipher():
+    global cipher
+    key = await get_encryption_key()
+    cipher = Fernet(key.encode())
+
+def encrypt_session(sess: str) -> str:
+    if cipher is None:
+        raise RuntimeError("Cipher not initialized")
+    return cipher.encrypt(sess.encode()).decode()
+
+def decrypt_session(encrypted: str) -> str:
+    if cipher is None:
+        raise RuntimeError("Cipher not initialized")
+    return cipher.decrypt(encrypted.encode()).decode()
+
+async def save_session(user_id: int, session_str: str):
+    encrypted = encrypt_session(session_str)
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO user_sessions (user_id, session_encrypted) VALUES ($1, $2) "
+            "ON CONFLICT (user_id) DO UPDATE SET session_encrypted = $2, updated_at = CURRENT_TIMESTAMP",
+            user_id, encrypted
+        )
+
+async def load_sessions() -> dict:
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id, session_encrypted FROM user_sessions")
+    sessions = {}
+    for row in rows:
+        try:
+            sess = decrypt_session(row['session_encrypted'])
+            sessions[row['user_id']] = sess
+        except Exception:
+            await delete_session(row['user_id'])
+            continue
+    return sessions
+
+async def delete_session(user_id: int):
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM user_sessions WHERE user_id = $1", user_id)
+
+# ─── WALLET ────────────────────────────────────────────────────────
+async def get_balance(user_id: int) -> float:
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT balance FROM user_wallet WHERE user_id = $1", user_id)
+        return float(row['balance']) if row else 0.0
+
+async def add_balance(user_id: int, amount: float):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO user_wallet (user_id, balance) VALUES ($1, $2)
+            ON CONFLICT (user_id) DO UPDATE SET balance = user_wallet.balance + $2, updated_at = CURRENT_TIMESTAMP
+        """, user_id, amount)
+
+async def deduct_balance(user_id: int, amount: float):
+    bal = await get_balance(user_id)
+    if bal < amount:
+        raise ValueError("Insufficient balance")
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE user_wallet SET balance = balance - $2, updated_at = CURRENT_TIMESTAMP WHERE user_id = $1
+        """, user_id, amount)
+
+# ─── PREMIUM ──────────────────────────────────────────────────────
+async def add_premium_user(user_id: int, plan: str, days: int):
+    expiry = datetime.datetime.now() + datetime.timedelta(days=days)
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO premium_users (user_id, plan, expiry_date, status)
+            VALUES ($1, $2, $3, 'active')
+            ON CONFLICT (user_id) DO UPDATE
+            SET plan = $2, expiry_date = $3, status = 'active', start_date = CURRENT_TIMESTAMP
+        """, user_id, plan, expiry)
+
+async def get_premium_user(user_id: int):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM premium_users WHERE user_id = $1", user_id)
+        return dict(row) if row else None
+
+async def check_premium_status(user_id: int):
+    data = await get_premium_user(user_id)
+    if not data or data['status'] != 'active':
+        return None
+    if data['expiry_date'] < datetime.datetime.now():
+        async with db_pool.acquire() as conn:
+            await conn.execute("UPDATE premium_users SET status = 'expired' WHERE user_id = $1", user_id)
+        return None
+    return data
+
+async def extend_premium(user_id: int, days: int):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE premium_users
+            SET expiry_date = GREATEST(expiry_date, CURRENT_TIMESTAMP) + INTERVAL '$1 days',
+                status = 'active'
+            WHERE user_id = $2
+        """, days, user_id)
+
+async def add_protection(user_id: int, command: str):
+    async with db_pool.acquire() as conn:
+        await conn.execute("INSERT INTO premium_protections (user_id, command_name) VALUES ($1, $2) ON CONFLICT DO NOTHING", user_id, command)
+
+async def remove_protection(user_id: int, command: str):
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM premium_protections WHERE user_id = $1 AND command_name = $2", user_id, command)
+
+async def get_protections(user_id: int) -> Set[str]:
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT command_name FROM premium_protections WHERE user_id = $1", user_id)
+    return {row['command_name'] for row in rows}
+
+async def is_protected(target_user: int, command: str) -> bool:
+    prem = await check_premium_status(target_user)
+    if not prem:
+        return False
+    protections = await get_protections(target_user)
+    return command in protections
+
+# ─── MAIN BOT ─────────────────────────────────────────────────────
+MAIN_BOT_CLIENT = TelegramClient("main_bot_session", API_ID, API_HASH)
+
+active_userbots = {}
+user_sessions = {}
+user_states = {}
+
+print("🚀 Main Bot started...")
+
+async def is_user_in_channel(user_id, channel_data):
+    try:
+        channel = await MAIN_BOT_CLIENT.get_entity(channel_data["id"])
+        await MAIN_BOT_CLIENT.get_permissions(channel, user_id)
+        return True
+    except:
+        return False
+
+def get_join_buttons():
+    buttons = []
+    for idx, ch in enumerate(REQUIRED_CHANNELS, 1):
+        buttons.append([types.KeyboardButtonUrl(text=f"🔗 Join {ch['name']}", url=ch["invite"])])
+    buttons.append([types.KeyboardButtonCallback(text="✅ I have joined all", data=b"verify_channels")])
+    return buttons
+
+async def shutdown_handler(sig, frame):
+    print("🛑 Shutting down...")
+    for uid in broadcast_users:
+        try:
+            await MAIN_BOT_CLIENT.send_message(uid, "⚠️ Bot is going offline for maintenance.\nWe'll be back soon!")
+            await asyncio.sleep(0.5)
+        except:
+            pass
+    for uid, client in active_userbots.items():
+        try:
+            await client.disconnect()
+        except:
+            pass
+    await MAIN_BOT_CLIENT.disconnect()
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, lambda s, f: asyncio.create_task(shutdown_handler(s, f)))
+signal.signal(signal.SIGINT, lambda s, f: asyncio.create_task(shutdown_handler(s, f)))
+
+async def safe_reply(event, text, buttons=None, **kwargs):
+    try:
+        return await event.reply(text, buttons=buttons, **kwargs)
+    except FloodWaitError as e:
+        wait = e.seconds + 1
+        await asyncio.sleep(wait)
+        return await event.reply(text, buttons=buttons, **kwargs)
+    except:
+        return None
+
+async def safe_respond(event, text, **kwargs):
+    try:
+        return await event.respond(text, **kwargs)
+    except FloodWaitError as e:
+        wait = e.seconds + 1
+        await asyncio.sleep(wait)
+        return await event.respond(text, **kwargs)
+    except:
+        return None
+
+async def safe_edit(event, text, buttons=None, **kwargs):
+    try:
+        return await event.edit(text, buttons=buttons, **kwargs)
+    except FloodWaitError as e:
+        wait = e.seconds + 1
+        await asyncio.sleep(wait)
+        return await event.edit(text, buttons=buttons, **kwargs)
+    except MessageNotModifiedError:
+        pass
+    except:
+        return None
+
+async def safe_send_main(chat, text, **kwargs):
+    try:
+        return await MAIN_BOT_CLIENT.send_message(chat, text, **kwargs)
+    except FloodWaitError as e:
+        wait = e.seconds + 1
+        await asyncio.sleep(wait)
+        return await MAIN_BOT_CLIENT.send_message(chat, text, **kwargs)
+    except:
+        return None
+
+def plan_price(plan):
+    return {"monthly": 45, "quarterly": 120, "yearly": 490}[plan]
+
+def plan_price_str(plan):
+    return f"₹{plan_price(plan)}"
+
+# ─── MAIN HANDLERS ──────────────────────────────────────────────
+
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/start"))
+async def start_handler(event):
+    user_id = event.sender_id
+    chat_id = event.chat_id
+    broadcast_users.add(user_id)
+    save_users(broadcast_users)
+    buttons = [
+        [types.KeyboardButtonCallback("💎 Buy Premium", data="buy_menu")],
+        [types.KeyboardButtonCallback("💰 Deposit / Check Balance", data="deposit")],
+        [types.KeyboardButtonUrl("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)],
+    ]
+    bal = await get_balance(user_id)
+    await safe_reply(
+        event,
+        f"╔═══════════════════════════════════════════╗\n"
+        f"║  ✦ 👑 ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️ 𝐀𝐔𝐓𝐎-𝐃𝐄𝐏𝐋𝐎𝐘 👑 ✦  ║\n"
+        f"╚═══════════════════════════════════════════╝\n\n"
+        f"Welcome to the **Ultimate Userbot Manager**.\n"
+        f"• To start your personal userbot, type `/login`\n"
+        f"• To stop it, use `/logout`\n"
+        f"• Use the buttons below to buy premium or deposit.\n\n"
+        f"💰 **Your Wallet Balance:** ₹{bal:.2f}\n\n"
+        "Enjoy the premium experience! 🚀",
+        buttons=buttons
+    )
+
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/login"))
+async def login_handler(event):
+    user_id = event.sender_id
+    chat_id = event.chat_id
+
+    not_joined = []
+    for ch in REQUIRED_CHANNELS:
+        if not await is_user_in_channel(user_id, ch):
+            not_joined.append(ch)
+
+    if not_joined:
+        msg = "❌ **You must join all channels first:**\n\n"
+        for ch in not_joined:
+            msg += f"• {ch['name']} ({ch['invite']})\n"
+        msg += "\nAfter joining, click the **'✅ I have joined all'** button below."
+        buttons = get_join_buttons()
+        await safe_reply(event, msg, buttons=buttons)
+        return
+
+    user_states[chat_id] = {"step": "NUMBER"}
+    await safe_reply(
+        event,
+        "📱 **Step 1:** Please send your Telegram phone number **with country code**.\n"
+        "Example: `+919876543210`"
+    )
+
+# ─── HANDLE PHONE NUMBER INPUT ──────────────────────────────────
+@MAIN_BOT_CLIENT.on(events.NewMessage)
+async def handle_login_phone(event):
+    # Only process in private chats
+    if event.chat_id != event.sender_id:
+        return
+    
+    # Skip if message is a command (starts with /)
+    if event.raw_text and event.raw_text.startswith('/'):
+        return
+    
+    user_id = event.sender_id
+    state = user_states.get(user_id)
+    
+    # Only process if user is in login flow and waiting for number
+    if not state or state.get("step") != "NUMBER":
+        return
+
+    phone = event.raw_text.strip()
+    
+    # Validate phone number format
+    if not re.match(r'^\+?\d{7,15}$', phone):
+        await safe_reply(event, "❌ Invalid phone number. Please send with country code, e.g., `+919876543210`")
+        return
+
+    # Create a temporary client to send the code request
+    try:
+        temp_client = TelegramClient(StringSession(), API_ID, API_HASH)
+        await temp_client.connect()
+        await temp_client.send_code_request(phone)
+        
+        user_states[user_id]["step"] = "CODE"
+        user_states[user_id]["phone"] = phone
+        user_states[user_id]["temp_client"] = temp_client
+        
+        await safe_reply(event, "📨 **Code sent!** Please check your Telegram app for the login code.\n\nSend the code as a number (e.g., `12345`).")
+    except Exception as e:
+        await safe_reply(event, f"❌ Failed to send code: {str(e)}")
+        user_states.pop(user_id, None)
+        try:
+            await temp_client.disconnect()
+        except:
+            pass
+
+# ─── HANDLE CODE INPUT ──────────────────────────────────────────
+@MAIN_BOT_CLIENT.on(events.NewMessage)
+async def handle_login_code(event):
+    # Only process in private chats
+    if event.chat_id != event.sender_id:
+        return
+    
+    # Skip if message is a command
+    if event.raw_text and event.raw_text.startswith('/'):
+        return
+    
+    user_id = event.sender_id
+    state = user_states.get(user_id)
+    
+    # Only process if user is waiting for code
+    if not state or state.get("step") != "CODE":
+        return
+
+    code = event.raw_text.strip()
+    
+    # Validate code
+    if not code.isdigit():
+        await safe_reply(event, "❌ Please send only the numeric code.")
+        return
+
+    temp_client = state.get("temp_client")
+    phone = state.get("phone")
+    
+    if not temp_client or not phone:
+        await safe_reply(event, "❌ Login session expired. Please start again with `/login`.")
+        user_states.pop(user_id, None)
+        return
+
+    try:
+        await temp_client.sign_in(phone, code=code)
+        session_str = temp_client.session.save()
+        await save_session(user_id, session_str)
+        asyncio.create_task(run_user_bot_with_restart(session_str, user_id))
+        await safe_reply(event, "✅ **Userbot started successfully!**\nYou can now use it in groups.\nType `.menu` to see commands.")
+        user_states.pop(user_id, None)
+        await temp_client.disconnect()
+    except SessionPasswordNeededError:
+        state["step"] = "PASSWORD"
+        await safe_reply(event, "🔐 **Two-factor authentication is enabled.**\nPlease send your 2FA password.")
+    except Exception as e:
+        await safe_reply(event, f"❌ Login failed: {str(e)}")
+        user_states.pop(user_id, None)
+        try:
+            await temp_client.disconnect()
+        except:
+            pass
+
+# ─── HANDLE 2FA PASSWORD ────────────────────────────────────────
+@MAIN_BOT_CLIENT.on(events.NewMessage)
+async def handle_login_password(event):
+    # Only process in private chats
+    if event.chat_id != event.sender_id:
+        return
+    
+    # Skip if message is a command
+    if event.raw_text and event.raw_text.startswith('/'):
+        return
+    
+    user_id = event.sender_id
+    state = user_states.get(user_id)
+    
+    # Only process if user is waiting for password
+    if not state or state.get("step") != "PASSWORD":
+        return
+
+    password = event.raw_text.strip()
+    temp_client = state.get("temp_client")
+    
+    if not temp_client:
+        await safe_reply(event, "❌ Session expired. Please start again with `/login`.")
+        user_states.pop(user_id, None)
+        return
+
+    try:
+        await temp_client.sign_in(password=password)
+        session_str = temp_client.session.save()
+        await save_session(user_id, session_str)
+        asyncio.create_task(run_user_bot_with_restart(session_str, user_id))
+        await safe_reply(event, "✅ **Userbot started successfully!**")
+        user_states.pop(user_id, None)
+        await temp_client.disconnect()
+    except Exception as e:
+        await safe_reply(event, f"❌ Invalid password: {str(e)}")
+
+# ─── CALLBACK QUERY HANDLER ─────────────────────────────────────
+@MAIN_BOT_CLIENT.on(events.CallbackQuery)
+async def callback_handler(event):
+    data = event.data.decode()
+    
+    if data == "verify_channels":
+        user_id = event.sender_id
+        chat_id = event.chat_id
+        not_joined = []
+        for ch in REQUIRED_CHANNELS:
+            if not await is_user_in_channel(user_id, ch):
+                not_joined.append(ch)
+        if not_joined:
+            msg = "❌ **You still haven't joined:**\n"
+            for ch in not_joined:
+                msg += f"• {ch['name']} ({ch['invite']})\n"
+            msg += "\nPlease join and then click 'Verify' again."
+            buttons = get_join_buttons()
+            try:
+                await safe_edit(event, msg, buttons=buttons)
+            except MessageNotModifiedError:
+                pass
+            await event.answer("Please join all channels first.", alert=True)
+        else:
+            try:
+                await safe_edit(event, "✅ **All channels verified!**\n\n📱 Now send your phone number (with country code).")
+            except MessageNotModifiedError:
+                pass
+            user_states[chat_id] = {"step": "NUMBER"}
+            await safe_respond(
+                event,
+                "📱 **Step 1:** Send your phone number with country code.\n"
+                "Example: `+919876543210`"
+            )
+            await event.answer("Verified! Now send your number.")
+
+    elif data == "deposit":
+        user_id = event.sender_id
+        if event.chat_id != user_id:
+            await event.answer("Please use this in private chat.", alert=True)
+            return
+        caption = (
+            "💰 **Deposit Funds**\n\n"
+            "1. Scan the QR below or use UPI: `{UPI_ID}`\n"
+            "2. Send any amount you want to deposit.\n"
+            "3. **After payment, send a screenshot of the transaction** with the **amount paid** in the caption.\n"
+            "4. Example caption: `I paid ₹100`\n"
+            "5. Our team will verify and credit your wallet."
+        ).format(UPI_ID=UPI_ID)
+        buttons = [[types.KeyboardButtonUrl("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)]]
+        try:
+            await event.delete()
+        except:
+            pass
+        try:
+            await event.respond(caption, file=QR_IMAGE_PATH, buttons=buttons)
+        except Exception as e:
+            await event.respond(caption + "\n\n⚠️ QR image not found. Please contact owner.", buttons=buttons)
+            print(f"Deposit QR send error: {e}")
+        user_states[user_id] = {"step": "waiting_deposit"}
+        await event.answer("Deposit instructions sent.")
+
+    elif data == "buy_menu":
+        user_id = event.sender_id
+        if event.chat_id != user_id:
+            await event.answer("Please use this in private chat.", alert=True)
+            return
+        prem = await check_premium_status(user_id)
+        if prem:
+            expiry = prem['expiry_date'].strftime("%Y-%m-%d")
+            await safe_edit(event, f"💎 You are already a premium user!\nPlan: {prem['plan'].upper()}\nExpires: {expiry}")
+            return
+        buttons = [
+            [types.KeyboardButtonCallback("📅 Monthly (₹45/30 days)", data="buy_monthly")],
+            [types.KeyboardButtonCallback("📅 Quarterly (₹120/90 days)", data="buy_quarterly")],
+            [types.KeyboardButtonCallback("📅 Yearly (₹490/365 days)", data="buy_yearly")],
+        ]
+        await safe_edit(event, "💰 **Select your premium plan:**", buttons=buttons)
+
+    elif data.startswith("buy_"):
+        plan = data.split("_")[1]
+        user_id = event.sender_id
+        if user_id not in user_states:
+            user_states[user_id] = {}
+        price = plan_price(plan)
+        bal = await get_balance(user_id)
+        if bal < price:
+            msg = (
+                f"❌ **Insufficient Balance!**\n\n"
+                f"Your wallet balance: ₹{bal:.2f}\n"
+                f"Plan price: ₹{price}\n"
+                f"Need additional: ₹{price - bal:.2f}\n\n"
+                f"Please deposit more funds using the **Deposit** button."
+            )
+            buttons = [[types.KeyboardButtonCallback("💰 Deposit Now", data="deposit")]]
+            await safe_edit(event, msg, buttons=buttons)
+            return
+        try:
+            await deduct_balance(user_id, price)
+        except ValueError as e:
+            await safe_edit(event, f"❌ {e}")
+            return
+        days = {"monthly":30, "quarterly":90, "yearly":365}[plan]
+        await add_premium_user(user_id, plan, days)
+        await safe_edit(event, f"✅ **Premium activated!**\nPlan: {plan.upper()}\nValid for {days} days.\nBalance deducted: ₹{price:.2f}")
+        await safe_send_main(user_id, f"🎉 **Your premium subscription has been activated!**\nPlan: {plan.upper()}\nExpires: {datetime.datetime.now() + datetime.timedelta(days=days)}")
+        await MAIN_BOT_CLIENT.send_message(user_id, "You can now use all premium commands in your userbot. Type `.menu11` to see them.")
+        user_states.pop(user_id, None)
+
+    elif data.startswith("approve_deposit_"):
+        parts = data.split("_")
+        if len(parts) != 4:
+            return
+        _, _, user_id_str, amount_str = parts
+        user_id = int(user_id_str)
+        amount = float(amount_str)
+        if event.sender_id not in MY_OWNER_IDS:
+            await event.answer("❌ Not authorized.", alert=True)
+            return
+        await add_balance(user_id, amount)
+        await event.edit(f"✅ Deposit of ₹{amount:.2f} approved for user {user_id}")
+        await safe_send_main(user_id, f"✅ Your deposit of ₹{amount:.2f} has been credited.\nNew balance: ₹{await get_balance(user_id):.2f}")
+
+    elif data.startswith("reject_deposit_"):
+        _, _, user_id_str = data.split("_")
+        user_id = int(user_id_str)
+        if event.sender_id not in MY_OWNER_IDS:
+            await event.answer("❌ Not authorized.", alert=True)
+            return
+        await event.edit(f"❌ Deposit rejected for user {user_id}")
+        await safe_send_main(user_id, "❌ Your deposit was rejected. Please try again or contact support.")
+
+    elif data.startswith("approve_"):
+        _, user_id_str, plan = data.split("_")
+        user_id = int(user_id_str)
+        if event.sender_id not in MY_OWNER_IDS:
+            await event.answer("❌ Not authorized.", alert=True)
+            return
+        days = {"monthly":30, "quarterly":90, "yearly":365}[plan]
+        await add_premium_user(user_id, plan, days)
+        await event.edit(f"✅ Premium activated for user {user_id} ({plan})")
+        await safe_send_main(user_id, f"🎉 **Your premium subscription has been activated!**\nPlan: {plan.upper()}\nExpires: {datetime.datetime.now() + datetime.timedelta(days=days)}")
+        await MAIN_BOT_CLIENT.send_message(user_id, "You can now use all premium commands in your userbot. Type `.menu11` to see them.")
+
+    elif data.startswith("reject_"):
+        _, user_id_str = data.split("_")
+        user_id = int(user_id_str)
+        if event.sender_id not in MY_OWNER_IDS:
+            await event.answer("❌ Not authorized.", alert=True)
+            return
+        await event.edit(f"❌ Payment rejected for user {user_id}")
+        await safe_send_main(user_id, "❌ Your payment was rejected. Please try again or contact support.")
+
+    else:
+        await event.answer("Unknown action.")
+
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/buy"))
+async def buy_cmd(event):
+    user_id = event.sender_id
+    if event.chat_id != user_id:
+        await safe_reply(event, "Please use this command in private chat with me.")
+        return
+    prem = await check_premium_status(user_id)
+    if prem:
+        expiry = prem['expiry_date'].strftime("%Y-%m-%d")
+        await safe_reply(event, f"💎 You are already a premium user!\nPlan: {prem['plan'].upper()}\nExpires: {expiry}")
+        return
+    buttons = [
+        [types.KeyboardButtonCallback("📅 Monthly (₹45/30 days)", data="buy_monthly")],
+        [types.KeyboardButtonCallback("📅 Quarterly (₹120/90 days)", data="buy_quarterly")],
+        [types.KeyboardButtonCallback("📅 Yearly (₹490/365 days)", data="buy_yearly")],
+    ]
+    await safe_reply(event, "💰 **Select your premium plan:**", buttons=buttons)
+
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/deposit"))
+async def deposit_cmd(event):
+    user_id = event.sender_id
+    if event.chat_id != user_id:
+        await safe_reply(event, "Please use this in private chat.")
+        return
+    caption = (
+        "💰 **Deposit Funds**\n\n"
+        "1. Scan the QR below or use UPI: `{UPI_ID}`\n"
+        "2. Send any amount you want to deposit.\n"
+        "3. **After payment, send a screenshot of the transaction** with the **amount paid** in the caption.\n"
+        "4. Example caption: `I paid ₹100`\n"
+        "5. Our team will verify and credit your wallet."
+    ).format(UPI_ID=UPI_ID)
+    buttons = [[types.KeyboardButtonUrl("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)]]
+    try:
+        await event.reply(caption, file=QR_IMAGE_PATH, buttons=buttons)
+    except Exception as e:
+        await event.reply(caption + "\n\n⚠️ QR image not found. Please contact owner.", buttons=buttons)
+        print(f"Deposit QR send error: {e}")
+    user_states[user_id] = {"step": "waiting_deposit"}
+
+# ─── HANDLE DEPOSIT SCREENSHOTS & PAYMENT ──────────────────────
+@MAIN_BOT_CLIENT.on(events.NewMessage)
+async def payment_handler(event):
+    if event.chat_id != event.sender_id:
+        return
+    
+    # Skip if message is a command
+    if event.raw_text and event.raw_text.startswith('/'):
+        return
+    
+    user_id = event.sender_id
+    state = user_states.get(user_id, {})
+    step = state.get("step")
+
+    # Deposit screenshot
+    if step == "waiting_deposit":
+        if not event.photo:
+            await safe_reply(event, "❌ Please send a screenshot image of the deposit transaction.")
+            return
+        caption_text = event.raw_text or ""
+        amount = None
+        match = re.search(r'(\d+(\.\d+)?)', caption_text)
+        if match:
+            amount = float(match.group(1))
+        if amount is None or amount <= 0:
+            await safe_reply(event, "❌ Please include the amount you paid in the caption.\nExample: `I paid ₹100`")
+            return
+        try:
+            user_entity = await MAIN_BOT_CLIENT.get_entity(user_id)
+            user_name = user_entity.first_name or "Unknown"
+            user_username = f"@{user_entity.username}" if user_entity.username else "No username"
+        except:
+            user_name = "Unknown"
+            user_username = "Unknown"
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        caption = (
+            f"💰 **New Deposit Request**\n"
+            f"👤 **User:** {user_name}\n"
+            f"🆔 **ID:** `{user_id}`\n"
+            f"🔗 **Username:** {user_username}\n"
+            f"💵 **Amount:** ₹{amount:.2f}\n"
+            f"⏰ **Time:** {now}"
+        )
+        for owner in MY_OWNER_IDS:
+            try:
+                fwd = await MAIN_BOT_CLIENT.forward_messages(owner, event.id, event.chat_id)
+                if fwd:
+                    await MAIN_BOT_CLIENT.send_message(
+                        owner,
+                        caption,
+                        buttons=[
+                            [types.KeyboardButtonCallback("✅ Approve", f"approve_deposit_{user_id}_{amount}")],
+                            [types.KeyboardButtonCallback("❌ Reject", f"reject_deposit_{user_id}")],
+                        ]
+                    )
+            except Exception as e:
+                print(f"Failed to forward deposit to owner {owner}: {e}")
+        await safe_reply(event, "✅ Your deposit screenshot has been sent for verification. You will receive confirmation shortly.")
+        return
+
+    # Legacy payment (manual)
+    if step == "waiting_payment":
+        if not event.photo:
+            await safe_reply(event, "❌ Please send a screenshot image of the payment.")
+            return
+        plan = state.get("plan", "monthly")
+        try:
+            user_entity = await MAIN_BOT_CLIENT.get_entity(user_id)
+            user_name = user_entity.first_name or "Unknown"
+            user_username = f"@{user_entity.username}" if user_entity.username else "No username"
+        except:
+            user_name = "Unknown"
+            user_username = "Unknown"
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        caption = (
+            f"💳 **New Payment Request**\n"
+            f"👤 **User:** {user_name}\n"
+            f"🆔 **ID:** `{user_id}`\n"
+            f"🔗 **Username:** {user_username}\n"
+            f"📅 **Plan:** {plan.upper()}\n"
+            f"💰 **Amount:** {plan_price_str(plan)}\n"
+            f"⏰ **Time:** {now}"
+        )
+        for owner in MY_OWNER_IDS:
+            try:
+                fwd = await MAIN_BOT_CLIENT.forward_messages(owner, event.id, event.chat_id)
+                if fwd:
+                    await MAIN_BOT_CLIENT.send_message(
+                        owner,
+                        caption,
+                        buttons=[
+                            [types.KeyboardButtonCallback("✅ Approve", f"approve_{user_id}_{plan}")],
+                            [types.KeyboardButtonCallback("❌ Reject", f"reject_{user_id}")],
+                        ]
+                    )
+            except Exception as e:
+                print(f"Failed to forward to owner {owner}: {e}")
+        await safe_reply(event, "✅ Your payment screenshot has been sent for verification. You will receive confirmation shortly.")
+        user_states.pop(user_id, None)
+
+# ─── BROADCAST ─────────────────────────────────────────────────
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/broadcast"))
+async def broadcast_cmd(event):
+    if event.sender_id not in MY_OWNER_IDS:
+        return await safe_reply(event, "❌ Owner only.")
+    text = event.text.strip().replace("/broadcast", "").strip()
+    if not text:
+        return await safe_reply(event, "Usage: /broadcast <message>")
+    count = 0
+    for uid in list(broadcast_users):
+        try:
+            await safe_send_main(uid, f"📢 **Broadcast from Owner:**\n{text}")
+            count += 1
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            print(f"Broadcast failed for {uid}: {e}")
+    await safe_reply(event, f"✅ Broadcast sent to {count} users.")
+
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/listusers"))
+async def listusers_cmd(event):
+    if event.sender_id not in MY_OWNER_IDS:
+        return
+    if not broadcast_users:
+        return await event.reply("📭 Koi user registered nahi hai.")
+    ids = "\n".join(f"• `{uid}`" for uid in sorted(broadcast_users))
+    await event.reply(f"👥 **Registered Users** ({len(broadcast_users)}):\n{ids}")
+
+# ─── LOGOUT ──────────────────────────────────────────────────────
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/logout"))
+async def logout_handler(event):
+    user_id = event.sender_id
+    chat_id = event.chat_id
+
+    if user_id not in active_userbots:
+        await safe_reply(event, "❌ You don't have an active userbot.\n\nUse `/login` to start one.")
+        return
+
+    try:
+        user_bot = active_userbots[user_id]
+        await user_bot.disconnect()
+        del active_userbots[user_id]
+        user_sessions.pop(user_id, None)
+        await delete_session(user_id)
+        user_states.pop(user_id, None)
+
+        await safe_reply(
+            event,
+            "✅ **Your userbot has been safely logged out.**\n\n"
+            "• Userbot session terminated.\n"
+            "• You can start a new one anytime with `/login`.\n"
+            "• Your ID remains in the broadcast list, so you'll still receive owner broadcasts."
+        )
+
+        for owner in MY_OWNER_IDS:
+            try:
+                await safe_send_main(owner, f"🚪 **User Logout**\nUser ID: `{user_id}`\nStatus: Userbot disconnected.")
+            except:
+                pass
+    except Exception as e:
+        await safe_reply(event, f"❌ Logout error: `{str(e)}`")
+        active_userbots.pop(user_id, None)
+        user_sessions.pop(user_id, None)
+        await delete_session(user_id)
+
+# ─── PURNJANAM ──────────────────────────────────────────────────
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/purnjanam"))
+async def purnjanam_handler(event):
+    if event.sender_id not in MY_OWNER_IDS:
+        return
+    await safe_reply(event, "🌀 **पुनर्जन्म**...\n⏳ Userbot restart ho raha hai...")
+    count = 0
+    for uid, session_str in list(user_sessions.items()):
+        try:
+            if uid in active_userbots:
+                try:
+                    await active_userbots[uid].disconnect()
+                except:
+                    pass
+                del active_userbots[uid]
+            asyncio.create_task(run_user_bot_with_restart(session_str, uid))
+            count += 1
+            await asyncio.sleep(1)
+        except Exception as e:
+            print(f"Purnjanam error for {uid}: {e}")
+    await safe_reply(event, f"✅ **पुनर्जन्म पूर्ण!**\n🔄 {count} userbots restart kiye gaye.")
+
+# ─── GIFT PREMIUM ──────────────────────────────────────────────
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/giftpremium"))
+async def gift_premium(event):
+    if event.sender_id not in MY_OWNER_IDS:
+        return
+    args = event.text.strip().split()
+    if len(args) < 3:
+        await safe_reply(event, "Usage: /giftpremium <user_id> <days>")
+        return
+    try:
+        user_id = int(args[1])
+        days = int(args[2])
+        if days <= 0:
+            await safe_reply(event, "Days must be a positive integer.")
+            return
+        plan = f"{days} days"
+        expiry = datetime.datetime.now() + datetime.timedelta(days=days)
+        await add_premium_user(user_id, plan, days)
+        await safe_reply(
+            event,
+            f"✅ Premium gifted to {user_id} for {days} days.\n"
+            f"📅 Expires on: {expiry.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        await safe_send_main(
+            user_id,
+            f"🎁 You have received a premium gift of **{days} days**!\n"
+            f"📅 Expires on: {expiry.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+    except ValueError:
+        await safe_reply(event, "❌ Invalid user ID or days. Usage: /giftpremium <user_id> <days>")
+    except Exception as e:
+        await safe_reply(event, f"❌ Error: {e}")
+
+# ─── SUPERVISED USERBOT LAUNCHER ──────────────────────────────
+async def run_user_bot_with_restart(session_string, chat_id):
+    restart_count = 0
+    last_restart_time = 0
+    session_invalid_notified = False
+    
+    while True:
+        try:
+            # Call the actual userbot function
+            await run_user_bot(session_string, chat_id)
+            break
+        except FloodWaitError as e:
+            wait = e.seconds + 1
+            print(f"⏳ Userbot flood wait: {wait}s. Sleeping...")
+            try:
+                await MAIN_BOT_CLIENT.send_message(chat_id, f"⚠️ **Telegram flood limit reached.**\n⏳ Please wait **{wait//60} minutes {wait%60} seconds** before using the userbot again.")
+                for owner in MY_OWNER_IDS:
+                    await MAIN_BOT_CLIENT.send_message(owner, f"🔄 **Userbot FloodWait**\nUser: {chat_id}\nWait: {wait}s")
+            except:
+                pass
+            await asyncio.sleep(wait)
+            restart_count = 0
+            session_invalid_notified = False
+        except (UnauthorizedError, ValueError, RPCError) as e:
+            error_msg = str(e)
+            print(f"❌ Session invalid for user {chat_id} – stopping restart loop.")
+            if not session_invalid_notified:
+                session_invalid_notified = True
+                try:
+                    await MAIN_BOT_CLIENT.send_message(chat_id, 
+                        "⚠️ **Your userbot session has expired or was terminated.**\n\n"
+                        "Please login again using `/login` to restart your userbot.\n\n"
+                        "🛑 This userbot will not restart automatically."
+                    )
+                    for owner in MY_OWNER_IDS:
+                        await MAIN_BOT_CLIENT.send_message(owner, 
+                            f"🔴 **Userbot Session Invalid**\n"
+                            f"👤 User: {chat_id}\n"
+                            f"📌 Reason: Device terminated or session expired\n"
+                            f"⏰ Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+                        )
+                except:
+                    pass
+            try:
+                if chat_id in active_userbots:
+                    await active_userbots[chat_id].disconnect()
+                    del active_userbots[chat_id]
+            except:
+                pass
+            user_sessions.pop(chat_id, None)
+            await delete_session(chat_id)
+            break
+        except Exception as e:
+            error_msg = str(e)
+            if "SESSION_INVALID" in error_msg or "invalid" in error_msg.lower():
+                if not session_invalid_notified:
+                    session_invalid_notified = True
+                    try:
+                        await MAIN_BOT_CLIENT.send_message(chat_id, 
+                            "⚠️ **Your userbot session has expired.**\n\n"
+                            "Please login again using `/login`.\n\n"
+                            "🛑 This userbot will not restart automatically."
+                        )
+                        for owner in MY_OWNER_IDS:
+                            await MAIN_BOT_CLIENT.send_message(owner, 
+                                f"🔴 **Userbot Session Invalid**\n"
+                                f"👤 User: {chat_id}\n"
+                                f"📌 Reason: {error_msg[:100]}\n"
+                                f"⏰ Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+                            )
+                    except:
+                        pass
+                try:
+                    if chat_id in active_userbots:
+                        await active_userbots[chat_id].disconnect()
+                        del active_userbots[chat_id]
+                except:
+                    pass
+                user_sessions.pop(chat_id, None)
+                await delete_session(chat_id)
+                break
+            now = time.time()
+            if restart_count >= 5 and (now - last_restart_time) < 60:
+                print(f"⚠️ Too many restarts for user {chat_id} in short time. Waiting...")
+                try:
+                    await MAIN_BOT_CLIENT.send_message(chat_id, f"⚠️ **Userbot is having issues.**\n⏳ Waiting 60 seconds before retry...")
+                except:
+                    pass
+                await asyncio.sleep(60)
+                restart_count = 0
+            restart_count += 1
+            last_restart_time = now
+            print(f"⚠️ Userbot crashed: {error_msg[:100]}\nRestarting in 5 seconds... (Attempt {restart_count})")
+            if restart_count % 3 == 1:
+                try:
+                    await MAIN_BOT_CLIENT.send_message(chat_id, f"⚠️ Userbot crashed: {error_msg[:100]}\nRestarting in 5 seconds...")
+                except:
+                    pass
+            if restart_count % 5 == 0:
+                try:
+                    for owner in MY_OWNER_IDS:
+                        await MAIN_BOT_CLIENT.send_message(owner, 
+                            f"🔄 **Userbot Restart**\n"
+                            f"👤 User: {chat_id}\n"
+                            f"📌 Reason: {error_msg[:80]}\n"
+                            f"🔢 Attempt: {restart_count}"
+                        )
+                except:
+                    pass
+            await asyncio.sleep(5)
             
 # ─── FULL USERBOT ENGINE ──────────────────────────────────────────
 async def run_user_bot(session_string, chat_id):
