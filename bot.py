@@ -414,6 +414,9 @@ async def handle_login_phone(event):
         return
 
     phone = event.raw_text.strip()
+    # Remove any spaces or special characters from phone
+    phone = re.sub(r'[\s\-\(\)]', '', phone)
+    
     if not re.match(r'^\+?\d{7,15}$', phone):
         await safe_reply(event, "❌ Invalid phone number. Please send with country code, e.g., `+919876543210`")
         return
@@ -426,7 +429,7 @@ async def handle_login_phone(event):
         user_states[user_id]["step"] = "CODE"
         user_states[user_id]["phone"] = phone
         user_states[user_id]["temp_client"] = temp_client
-        await safe_reply(event, "📨 **Code sent!** Please send the numeric code (e.g., `1 2 3 4 5`).")
+        await safe_reply(event, "📨 **Code sent!** Please send the numeric code (e.g., `12345` or `1 2 3 4 5`).")
     except Exception as e:
         await safe_reply(event, f"❌ Failed to send code: {str(e)}")
         user_states.pop(user_id, None)
@@ -447,9 +450,11 @@ async def handle_login_code(event):
     if not state or state.get("step") != "CODE":
         return
 
-    code = event.raw_text.strip()
+    # Remove spaces from the code
+    code = event.raw_text.strip().replace(" ", "").replace("-", "")
+    
     if not code.isdigit():
-        await safe_reply(event, "❌ Please send only the numeric code.")
+        await safe_reply(event, "❌ Please send only the numeric code (e.g., `12345`). Spaces are allowed.")
         return
 
     temp_client = state.get("temp_client")
@@ -464,17 +469,25 @@ async def handle_login_code(event):
         await temp_client.sign_in(phone, code=code)
         session_str = temp_client.session.save()
         await save_session(user_id, session_str)
+        # Start the userbot in background
         asyncio.create_task(run_user_bot_with_restart(session_str, user_id))
-        await safe_reply(event, "✅ **Userbot started successfully!**")
+        await safe_reply(event, "✅ **Userbot started successfully!**\nYou can now use it in groups.\nType `.menu` to see commands.")
         user_states.pop(user_id, None)
         await temp_client.disconnect()
     except SessionPasswordNeededError:
         # Ask for 2FA password
         state["step"] = "PASSWORD"
         await safe_reply(event, "🔐 **Two-factor authentication is enabled.**\nPlease send your 2FA password.")
+    except FloodWaitError as e:
+        wait = e.seconds + 1
+        await safe_reply(event, f"⏳ Too many attempts. Please wait **{wait} seconds** and try again.")
     except Exception as e:
-        await safe_reply(event, f"❌ Login failed: {str(e)}")
-        user_states.pop(user_id, None)
+        error_msg = str(e)
+        if "code invalid" in error_msg.lower() or "invalid code" in error_msg.lower():
+            await safe_reply(event, "❌ Invalid code. Please check and try again.\nSend the code again (e.g., `12345`).")
+        else:
+            await safe_reply(event, f"❌ Login failed: {error_msg}")
+            user_states.pop(user_id, None)
         try:
             await temp_client.disconnect()
         except:
@@ -507,6 +520,9 @@ async def handle_login_password(event):
         await safe_reply(event, "✅ **Userbot started successfully!**")
         user_states.pop(user_id, None)
         await temp_client.disconnect()
+    except FloodWaitError as e:
+        wait = e.seconds + 1
+        await safe_reply(event, f"⏳ Too many attempts. Please wait **{wait} seconds** and try again.")
     except Exception as e:
         await safe_reply(event, f"❌ Invalid password: {str(e)}")
         # Allow retry – keep state
