@@ -218,7 +218,7 @@ async def is_protected(target_user: int, command: str) -> bool:
     return command in protections
 
 # ─── MAIN BOT ─────────────────────────────────────────────────────
-main_bot = TelegramClient("main_bot_session", API_ID, API_HASH)   # ← Correct: no .start()
+MAIN_BOT_CLIENT = TelegramClient("main_bot_session", API_ID, API_HASH)
 user_states = {}
 
 active_userbots = {}
