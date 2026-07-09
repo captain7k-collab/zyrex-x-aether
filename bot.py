@@ -218,7 +218,7 @@ async def is_protected(target_user: int, command: str) -> bool:
     return command in protections
 
 # ─── MAIN BOT ─────────────────────────────────────────────────────
-main_bot = TelegramClient("main_bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+main_bot = TelegramClient("main_bot_session", API_ID, API_HASH)
 user_states = {}  # payment states: {user_id: {"step": "plan"|"waiting_payment", "plan": ...}}
 
 active_userbots = {}
@@ -6675,8 +6675,8 @@ if __name__ == "__main__":
 
     # Start web server in a separate thread (Waitress is blocking)
     threading.Thread(target=run_web, daemon=True).start()
-
-    # Start the bot (asyncio)
+    
+    # Start the bot
     loop.run_until_complete(main_bot.start(bot_token=BOT_TOKEN))
     print("✅ Bot is running. Press Ctrl+C to stop.")
     loop.run_forever()
