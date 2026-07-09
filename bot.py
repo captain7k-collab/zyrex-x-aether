@@ -6645,7 +6645,7 @@ async def run_user_bot(session_string, chat_id):
         except:
             pass
 
-# ─── WEB SERVER ──────────────────────────────────────────────────
+# ─── WEB SERVER ──────────────────────────────────────────────────────
 from flask import Flask
 import threading
 from waitress import serve
@@ -6661,27 +6661,33 @@ def run_web():
     port = int(os.environ.get("PORT", 5000))
     serve(app, host="0.0.0.0", port=port)
 
-# ─── MAIN ────────────────────────────────────────────────────────
-if __name__ == "__main__":
+# ─── MAIN ────────────────────────────────────────────────────────────
+async def main():
     print("🚀 Main bot starting with Web Server (Waitress)...")
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    
+    # Initialize database and cipher
+    await init_db()
+    await init_cipher()
 
-    loop.run_until_complete(init_db())
-    loop.run_until_complete(init_cipher())
-
-    sessions = loop.run_until_complete(load_sessions())
+    # Restore sessions
+    sessions = await load_sessions()
     for uid, sess_str in sessions.items():
         try:
             asyncio.create_task(run_user_bot_with_restart(sess_str, uid))
             print(f"✅ Restored session for user {uid}")
         except Exception as e:
             print(f"❌ Failed to restore {uid}: {e}")
-            loop.run_until_complete(delete_session(uid))
+            await delete_session(uid)
 
+    # Start the web server in a background thread
     threading.Thread(target=run_web, daemon=True).start()
 
-    # Start the bot
-    loop.run_until_complete(MAIN_BOT_CLIENT.start(bot_token=BOT_TOKEN))
+    # Start the main bot client
+    await MAIN_BOT_CLIENT.start(bot_token=BOT_TOKEN)
     print("✅ Bot is running. Press Ctrl+C to stop.")
-    loop.run_forever()
+
+    # Keep the bot running forever
+    await MAIN_BOT_CLIENT.run_until_disconnected()
+
+if __name__ == "__main__":
+    asyncio.run(main())
