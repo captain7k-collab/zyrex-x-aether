@@ -2088,8 +2088,7 @@ async def run_user_bot(session_string, chat_id):
             "💭 A calm mind is a powerful weapon.",
             "💭 Pressure creates diamonds.",
         ]
-        # ─── NC PATTERNS ───
-             # ─── NC PATTERNS ───
+               # ─── NC PATTERNS ───
         HINDINC_PATTERNS = [
             "{text} चुडाकड़ ⊹ ࣪ ﹏𓊝﹏𓂁﹏⊹ ࣪ ˖",
             "{text} रैंडी ˖ ࣪ ꉂ🗯˙🫐⃟.꩜‹—",
@@ -6503,7 +6502,7 @@ async def cmd_spraydelay(event, arg):
             reason = user_bot.afk_data.get("reason", "I'm AFK")
             await safe_send(event.chat_id, f"🚫 I'm currently AFK. Reason: {reason}", reply_to=event.id)
 
-        # ─── START USERBOT ───
+              # ─── START USERBOT ───
         await main_bot.send_message(chat_id, f"🔥 **Your Userbot is now Active!**\n👤 {me.first_name}\n💡 Use `.menu` to get started.")
         await user_bot.run_until_disconnected()
 
