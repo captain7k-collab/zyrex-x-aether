@@ -384,44 +384,45 @@ async def callback_handler(event):
                 "Example: `+919876543210`"
             )
             await event.answer("Verified! Now send your number.")
-   elif data.startswith("buy_"):
-    plan = data.split("_")[1]  # monthly, quarterly, yearly
-    user_id = event.sender_id
-    if user_id not in user_states:
-        user_states[user_id] = {}
-    user_states[user_id]["step"] = "waiting_payment"
-    user_states[user_id]["plan"] = plan
+    
+    elif data.startswith("buy_"):
+        plan = data.split("_")[1]  # monthly, quarterly, yearly
+        user_id = event.sender_id
+        if user_id not in user_states:
+            user_states[user_id] = {}
+        user_states[user_id]["step"] = "waiting_payment"
+        user_states[user_id]["plan"] = plan
 
-    # ─── Premium Features Button (hardcoded link) ───
-    buttons = [[types.KeyboardButtonUrl("🔗 Premium Features", url="https://t.me/userbotsupport_ZA/20")]]
+        # ─── Premium Features Button (hardcoded link) ───
+        buttons = [[types.KeyboardButtonUrl("🔗 Premium Features", url="https://t.me/userbotsupport_ZA/20")]]
 
-    # ─── Payment Instructions ───
-    caption = (
-        f"✅ You selected **{plan.upper()}** plan.\n\n"
-        "💳 **Payment Instructions:**\n"
-        f"1. Scan the QR code below or use UPI: `{UPI_ID}`\n"
-        f"2. Send **{plan_price(plan)}** to the UPI ID.\n"
-        "3. Take a screenshot of the transaction (with UTR number).\n"
-        "4. Send the screenshot here in this chat.\n"
-        "5. Once our team approves, your premium will be activated."
-    )
-
-    # Delete the plan selection message
-    try:
-        await event.delete()
-    except:
-        pass
-
-    # ─── Send QR Image (from local file or GitHub URL) ───
-    try:
-        await event.respond(caption, file=QR_IMAGE_PATH, buttons=buttons)
-    except Exception as e:
-        # Fallback if image not found
-        await event.respond(
-            caption + "\n\n⚠️ QR image not found. Please contact owner.",
-            buttons=buttons
+        # ─── Payment Instructions ───
+        caption = (
+            f"✅ You selected **{plan.upper()}** plan.\n\n"
+            "💳 **Payment Instructions:**\n"
+            f"1. Scan the QR code below or use UPI: `{UPI_ID}`\n"
+            f"2. Send **{plan_price(plan)}** to the UPI ID.\n"
+            "3. Take a screenshot of the transaction (with UTR number).\n"
+            "4. Send the screenshot here in this chat.\n"
+            "5. Once our team approves, your premium will be activated."
         )
-        print(f"QR send error: {e}")
+
+        # Delete the plan selection message
+        try:
+            await event.delete()
+        except:
+            pass
+
+        # ─── Send QR Image (from local file or GitHub URL) ───
+        try:
+            await event.respond(caption, file=QR_IMAGE_PATH, buttons=buttons)
+        except Exception as e:
+            # Fallback if image not found
+            await event.respond(
+                caption + "\n\n⚠️ QR image not found. Please contact owner.",
+                buttons=buttons
+            )
+            print(f"QR send error: {e}")
 
     elif data.startswith("approve_"):
         # owner approval
@@ -431,12 +432,12 @@ async def callback_handler(event):
         if owner_id not in MY_OWNER_IDS:
             await event.answer("❌ You are not authorized.", alert=True)
             return
-        # Activate premium
         days = {"monthly":30, "quarterly":90, "yearly":365}[plan]
         await add_premium_user(user_id, plan, days)
         await event.edit(f"✅ Premium activated for user {user_id} ({plan})")
         await safe_send_main(user_id, f"🎉 **Your premium subscription has been activated!**\nPlan: {plan.upper()}\nExpires: {datetime.datetime.now() + datetime.timedelta(days=days)}")
         await main_bot.send_message(user_id, "You can now use all premium commands in your userbot. Type `.menu11` to see them.")
+
     elif data.startswith("reject_"):
         _, user_id_str = data.split("_")
         user_id = int(user_id_str)
@@ -446,6 +447,7 @@ async def callback_handler(event):
             return
         await event.edit(f"❌ Payment rejected for user {user_id}")
         await safe_send_main(user_id, "❌ Your payment was rejected. Please try again or contact support.")
+    
     else:
         await event.answer("Unknown action.")
 
