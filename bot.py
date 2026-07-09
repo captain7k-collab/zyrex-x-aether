@@ -177,7 +177,7 @@ async def delete_session(user_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM user_sessions WHERE user_id = $1", user_id)
 
-# ─── WALLET FUNCTIONS ─────────────────────────────────────────────
+# ─── WALLET ────────────────────────────────────────────────────────
 async def get_balance(user_id: int) -> float:
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT balance FROM user_wallet WHERE user_id = $1", user_id)
@@ -199,7 +199,7 @@ async def deduct_balance(user_id: int, amount: float):
             UPDATE user_wallet SET balance = balance - $2, updated_at = CURRENT_TIMESTAMP WHERE user_id = $1
         """, user_id, amount)
 
-# ─── PREMIUM MANAGEMENT ────────────────────────────────────────────
+# ─── PREMIUM ──────────────────────────────────────────────────────
 async def add_premium_user(user_id: int, plan: str, days: int):
     expiry = datetime.datetime.now() + datetime.timedelta(days=days)
     async with db_pool.acquire() as conn:
@@ -254,7 +254,7 @@ async def is_protected(target_user: int, command: str) -> bool:
     protections = await get_protections(target_user)
     return command in protections
 
-# ─── MAIN BOT ──────────────────────────────────────────────────────
+# ─── MAIN BOT ─────────────────────────────────────────────────────
 MAIN_BOT_CLIENT = TelegramClient("main_bot_session", API_ID, API_HASH)
 
 active_userbots = {}
@@ -375,6 +375,8 @@ async def start_handler(event):
 
 @MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/login"))
 async def login_handler(event):
+    if not event.is_private:
+        return
     user_id = event.sender_id
     chat_id = event.chat_id
 
@@ -402,7 +404,7 @@ async def login_handler(event):
 # ─── PHONE NUMBER HANDLER ─────────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.NewMessage)
 async def handle_login_phone(event):
-    if event.chat_id != event.sender_id:
+    if not event.is_private:
         return
     if event.raw_text and event.raw_text.startswith('/'):
         return
@@ -417,13 +419,14 @@ async def handle_login_phone(event):
         return
 
     try:
+        # Create a temporary client for login
         temp_client = TelegramClient(StringSession(), API_ID, API_HASH)
         await temp_client.connect()
         await temp_client.send_code_request(phone)
         user_states[user_id]["step"] = "CODE"
         user_states[user_id]["phone"] = phone
         user_states[user_id]["temp_client"] = temp_client
-        await safe_reply(event, "📨 **Code sent!** Please send the numeric code (e.g., `12345`).")
+        await safe_reply(event, "📨 **Code sent!** Please send the numeric code (e.g., `1 2 3 4 5`).")
     except Exception as e:
         await safe_reply(event, f"❌ Failed to send code: {str(e)}")
         user_states.pop(user_id, None)
@@ -435,7 +438,7 @@ async def handle_login_phone(event):
 # ─── CODE HANDLER ──────────────────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.NewMessage)
 async def handle_login_code(event):
-    if event.chat_id != event.sender_id:
+    if not event.is_private:
         return
     if event.raw_text and event.raw_text.startswith('/'):
         return
@@ -457,6 +460,7 @@ async def handle_login_code(event):
         return
 
     try:
+        # Attempt to sign in with the code
         await temp_client.sign_in(phone, code=code)
         session_str = temp_client.session.save()
         await save_session(user_id, session_str)
@@ -465,8 +469,9 @@ async def handle_login_code(event):
         user_states.pop(user_id, None)
         await temp_client.disconnect()
     except SessionPasswordNeededError:
+        # Ask for 2FA password
         state["step"] = "PASSWORD"
-        await safe_reply(event, "🔐 **2FA password required.** Please send your password.")
+        await safe_reply(event, "🔐 **Two-factor authentication is enabled.**\nPlease send your 2FA password.")
     except Exception as e:
         await safe_reply(event, f"❌ Login failed: {str(e)}")
         user_states.pop(user_id, None)
@@ -478,7 +483,7 @@ async def handle_login_code(event):
 # ─── 2FA PASSWORD HANDLER ─────────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.NewMessage)
 async def handle_login_password(event):
-    if event.chat_id != event.sender_id:
+    if not event.is_private:
         return
     if event.raw_text and event.raw_text.startswith('/'):
         return
@@ -490,7 +495,7 @@ async def handle_login_password(event):
     password = event.raw_text.strip()
     temp_client = state.get("temp_client")
     if not temp_client:
-        await safe_reply(event, "❌ Session expired. Please restart with `/login`.")
+        await safe_reply(event, "❌ Session expired. Please start again with `/login`.")
         user_states.pop(user_id, None)
         return
 
@@ -504,6 +509,7 @@ async def handle_login_password(event):
         await temp_client.disconnect()
     except Exception as e:
         await safe_reply(event, f"❌ Invalid password: {str(e)}")
+        # Allow retry – keep state
 
 # ─── CALLBACK QUERY HANDLER ───────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.CallbackQuery)
@@ -660,10 +666,9 @@ async def callback_handler(event):
 
 @MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/buy"))
 async def buy_cmd(event):
-    user_id = event.sender_id
-    if event.chat_id != user_id:
-        await safe_reply(event, "Please use this command in private chat with me.")
+    if not event.is_private:
         return
+    user_id = event.sender_id
     prem = await check_premium_status(user_id)
     if prem:
         expiry = prem['expiry_date'].strftime("%Y-%m-%d")
@@ -678,10 +683,9 @@ async def buy_cmd(event):
 
 @MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/deposit"))
 async def deposit_cmd(event):
-    user_id = event.sender_id
-    if event.chat_id != user_id:
-        await safe_reply(event, "Please use this in private chat.")
+    if not event.is_private:
         return
+    user_id = event.sender_id
     caption = (
         "💰 **Deposit Funds**\n\n"
         "1. Scan the QR below or use UPI: `{UPI_ID}`\n"
@@ -701,7 +705,7 @@ async def deposit_cmd(event):
 # ─── PAYMENT / DEPOSIT SCREENSHOT HANDLER ────────────────────────
 @MAIN_BOT_CLIENT.on(events.NewMessage)
 async def payment_handler(event):
-    if event.chat_id != event.sender_id:
+    if not event.is_private:
         return
     if event.raw_text and event.raw_text.startswith('/'):
         return
@@ -825,8 +829,9 @@ async def listusers_cmd(event):
 # ─── LOGOUT ─────────────────────────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/logout"))
 async def logout_handler(event):
+    if not event.is_private:
+        return
     user_id = event.sender_id
-    chat_id = event.chat_id
     if user_id not in active_userbots:
         await safe_reply(event, "❌ You don't have an active userbot.\n\nUse `/login` to start one.")
         return
@@ -1018,50 +1023,6 @@ async def run_user_bot_with_restart(session_string, chat_id):
                 except:
                     pass
             await asyncio.sleep(5)
-
-# ======================================================================
-#  IMPORTANT: Paste your complete `run_user_bot` function here
-#  (your userbot engine with all commands, menus, raids, etc.)
-# ======================================================================
-async def run_user_bot(session_string, chat_id):
-    """
-    ⚠️ REPLACE THIS WITH YOUR ORIGINAL USERBOT ENGINE CODE.
-    Everything from your old bot's run_user_bot function goes here.
-    """
-    pass  # <-- remove this line and paste your full engine
-
-# ─── WEB SERVER ─────────────────────────────────────────────────────
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "✅ Userbot is running!"
-
-def run_web():
-    port = int(os.environ.get("PORT", 5000))
-    from waitress import serve
-    serve(app, host="0.0.0.0", port=port)
-
-# ─── MAIN ──────────────────────────────────────────────────────────
-async def main():
-    print("🚀 Starting bot...")
-    await init_db()
-    await init_cipher()
-    sessions = await load_sessions()
-    for uid, sess_str in sessions.items():
-        try:
-            asyncio.create_task(run_user_bot_with_restart(sess_str, uid))
-            print(f"✅ Restored session for user {uid}")
-        except Exception as e:
-            print(f"❌ Failed to restore {uid}: {e}")
-            await delete_session(uid)
-    threading.Thread(target=run_web, daemon=True).start()
-    await MAIN_BOT_CLIENT.start(bot_token=BOT_TOKEN)
-    print("✅ Bot is running. Press Ctrl+C to stop.")
-    await MAIN_BOT_CLIENT.run_until_disconnected()
-
-if __name__ == "__main__":
-    asyncio.run(main())
     
 # ─── FULL USERBOT ENGINE ──────────────────────────────────────────
 async def run_user_bot(session_string, chat_id):
