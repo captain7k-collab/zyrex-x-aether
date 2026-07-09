@@ -229,7 +229,7 @@ print("🚀 Main Bot started with Admin Logger Engine...")
 async def is_user_in_channel(user_id, channel_data):
     try:
         channel = await MAIN_BOT_CLIENT.get_entity(channel_data["id"])
-       await MAIN_BOT_CLIENT.get_permissions(channel, user_id)
+        await MAIN_BOT_CLIENT.get_permissions(channel, user_id)
         return True
     except Exception:
         return False
