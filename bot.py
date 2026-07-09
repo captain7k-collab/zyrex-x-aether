@@ -6674,6 +6674,8 @@ if __name__ == "__main__":
             loop.run_until_complete(delete_session(uid))
 
     threading.Thread(target=run_web, daemon=True).start()
-   loop.run_until_complete(MAIN_BOT_CLIENT.start(bot_token=BOT_TOKEN))
+
+    # Start the bot
+    loop.run_until_complete(MAIN_BOT_CLIENT.start(bot_token=BOT_TOKEN))
     print("✅ Bot is running. Press Ctrl+C to stop.")
     loop.run_forever()
