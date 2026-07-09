@@ -95,6 +95,30 @@ async def init_db():
                 status TEXT DEFAULT 'active'
             )
         """)
+        # ─── FIX: Ensure 'plan' column exists (migration for old tables) ───
+        await conn.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name='premium_users' AND column_name='plan') THEN
+                    ALTER TABLE premium_users ADD COLUMN plan TEXT NOT NULL DEFAULT 'monthly';
+                END IF;
+            END $$;
+        """)
+        # Also ensure expiry_date and status exist (just in case)
+        await conn.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name='premium_users' AND column_name='expiry_date') THEN
+                    ALTER TABLE premium_users ADD COLUMN expiry_date TIMESTAMP;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name='premium_users' AND column_name='status') THEN
+                    ALTER TABLE premium_users ADD COLUMN status TEXT DEFAULT 'active';
+                END IF;
+            END $$;
+        """)
         # ─── premium_protections table ───
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS premium_protections (
