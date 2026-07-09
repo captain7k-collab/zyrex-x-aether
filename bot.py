@@ -2379,11 +2379,7 @@ async def run_user_bot(session_string, chat_id):
             return decorator
 
         owner_only_commands = {"addtext","edittext","deltext","cleartext","spraydelay","addadmin","deladmin"}
-
-     # ─── ALL COMMANDS ────────────────────────────────────────────────────
-# This block contains ALL 500+ commands: raids, spam, tools, games,
-# premium features, fun meters, and everything else.
-
+  
 # ─── MUTE COMMANDS ───
 @register_cmd("mute", needs_reply=True)
 async def cmd_mute(event, arg):
@@ -6502,7 +6498,7 @@ async def cmd_spraydelay(event, arg):
             reason = user_bot.afk_data.get("reason", "I'm AFK")
             await safe_send(event.chat_id, f"🚫 I'm currently AFK. Reason: {reason}", reply_to=event.id)
 
-           # ─── START USERBOT ───
+        # ─── START USERBOT ───
         await main_bot.send_message(chat_id, f"🔥 **Your Userbot is now Active!**\n👤 {me.first_name}\n💡 Use `.menu` to get started.")
         await user_bot.run_until_disconnected()
 
