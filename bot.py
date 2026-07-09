@@ -6989,40 +6989,35 @@ async def run_user_bot(session_string, chat_id):
                     ))
                 except:
                     pass
-
         # ─── START USERBOT ──────────────────────────────────────────────────
-             await MAIN_BOT_CLIENT.send_message(chat_id, f"🔥 **Your Userbot is now Active!**\n👤 {me.first_name}\n💡 Use `.menu` to get started.")
+        await MAIN_BOT_CLIENT.send_message(chat_id, f"🔥 **Your Userbot is now Active!**\n👤 {me.first_name}\n💡 Use `.menu` to get started.")
         await user_bot.run_until_disconnected()
 
     except (UnauthorizedError, ValueError, RPCError) as e:
-        # Session invalid – restart loop ko break karne ke liye re-raise
         error_msg = str(e)
         if "SESSION_INVALID" in error_msg or "invalid" in error_msg.lower():
             try:
                 await MAIN_BOT_CLIENT.send_message(chat_id, "⚠️ **Your userbot session is invalid. Please login again with /login.**")
             except:
                 pass
-        raise  # Re-raise so restart loop stops
+        raise
 
     except asyncio.CancelledError:
         print(f"Userbot task cancelled for {chat_id}")
         raise
 
     except Exception as e:
-        # Yeh catch karega: PersistentTimestampOutdatedError, aur baaki sab
         print(f"Userbot crashed: {e}")
         try:
             await MAIN_BOT_CLIENT.send_message(chat_id, f"⚠️ **Userbot crashed:** {str(e)[:100]}\nRestarting...")
         except:
             pass
-        raise  # Re-raise so restart loop handles it
+        raise
 
     finally:
-        # 🔥 IMPORTANT: Client ko properly cleanup karein
         active_userbots.pop(chat_id, None)
         if user_bot:
             try:
-                # Pending tasks cancel karein
                 for task in asyncio.all_tasks():
                     if task.get_name() == f"userbot_{chat_id}":
                         task.cancel()
