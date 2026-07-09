@@ -85,7 +85,7 @@ async def init_db():
                 key_value TEXT NOT NULL
             )
         """)
-        # ─── premium_users table ───
+        # ─── premium_users table (with all required columns) ───
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS premium_users (
                 user_id BIGINT PRIMARY KEY,
@@ -95,7 +95,7 @@ async def init_db():
                 status TEXT DEFAULT 'active'
             )
         """)
-        # ─── FIX: Ensure 'plan' column exists (migration for old tables) ───
+        # ─── MIGRATION: Add missing columns if table already exists ───
         await conn.execute("""
             DO $$
             BEGIN
@@ -103,12 +103,10 @@ async def init_db():
                                WHERE table_name='premium_users' AND column_name='plan') THEN
                     ALTER TABLE premium_users ADD COLUMN plan TEXT NOT NULL DEFAULT 'monthly';
                 END IF;
-            END $$;
-        """)
-        # Also ensure expiry_date and status exist (just in case)
-        await conn.execute("""
-            DO $$
-            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                               WHERE table_name='premium_users' AND column_name='start_date') THEN
+                    ALTER TABLE premium_users ADD COLUMN start_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+                END IF;
                 IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                                WHERE table_name='premium_users' AND column_name='expiry_date') THEN
                     ALTER TABLE premium_users ADD COLUMN expiry_date TIMESTAMP;
@@ -833,9 +831,18 @@ async def gift_premium(event):
             await safe_reply(event, "Days must be a positive integer.")
             return
         plan = f"{days} days"
+        expiry = datetime.datetime.now() + datetime.timedelta(days=days)
         await add_premium_user(user_id, plan, days)
-        await safe_reply(event, f"✅ Premium gifted to {user_id} for {days} days.")
-        await safe_send_main(user_id, f"🎁 You have received a premium gift of **{days} days**! Enjoy the features.")
+        await safe_reply(
+            event,
+            f"✅ Premium gifted to {user_id} for {days} days.\n"
+            f"📅 Expires on: {expiry.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        await safe_send_main(
+            user_id,
+            f"🎁 You have received a premium gift of **{days} days**!\n"
+            f"📅 Expires on: {expiry.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
     except ValueError:
         await safe_reply(event, "❌ Invalid user ID or days. Usage: /giftpremium <user_id> <days>")
     except Exception as e:
