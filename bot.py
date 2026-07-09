@@ -319,6 +319,10 @@ async def start_handler(event):
     chat_id = event.chat_id
     broadcast_users.add(user_id)
     save_users(broadcast_users)
+    buttons = [
+        [types.KeyboardButtonCallback("💎 Buy Premium", data="buy_menu")],
+        [types.KeyboardButtonUrl("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)],
+    ]
     await safe_reply(
         event,
         "╔═══════════════════════════════════════════╗\n"
@@ -327,8 +331,9 @@ async def start_handler(event):
         "Welcome to the **Ultimate Userbot Manager**.\n"
         "• To start your personal userbot, type `/login`\n"
         "• To stop it, use `/logout`\n"
-        "• To buy premium, type `/buy`\n\n"
-        "Enjoy the premium experience! 🚀"
+        "• Use the buttons below to buy premium or view features.\n\n"
+        "Enjoy the premium experience! 🚀",
+        buttons=buttons
     )
 
 @MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/login"))
@@ -391,6 +396,24 @@ async def callback_handler(event):
             )
             await event.answer("Verified! Now send your number.")
     
+    elif data == "buy_menu":
+        # User clicked "Buy Premium" from /start
+        user_id = event.sender_id
+        if event.chat_id != user_id:
+            await event.answer("Please use this command in private chat.", alert=True)
+            return
+        prem = await check_premium_status(user_id)
+        if prem:
+            expiry = prem['expiry_date'].strftime("%Y-%m-%d")
+            await safe_edit(event, f"💎 You are already a premium user!\nPlan: {prem['plan'].upper()}\nExpires: {expiry}")
+            return
+        buttons = [
+            [types.KeyboardButtonCallback("📅 Monthly (₹45/30 days)", data="buy_monthly")],
+            [types.KeyboardButtonCallback("📅 Quarterly (₹120/90 days)", data="buy_quarterly")],
+            [types.KeyboardButtonCallback("📅 Yearly (₹490/365 days)", data="buy_yearly")],
+        ]
+        await safe_edit(event, "💰 **Select your premium plan:**", buttons=buttons)
+
     elif data.startswith("buy_"):
         plan = data.split("_")[1]  # monthly, quarterly, yearly
         user_id = event.sender_id
@@ -492,7 +515,27 @@ async def payment_handler(event):
         return
     # Forward to owners with approve/reject buttons
     plan = user_states[user_id].get("plan", "monthly")
-    caption = f"💳 **New Payment Request**\nUser ID: `{user_id}`\nPlan: {plan.upper()}\nAmount: {plan_price(plan)}"
+    
+    # Get user details
+    try:
+        user_entity = await MAIN_BOT_CLIENT.get_entity(user_id)
+        user_name = user_entity.first_name or "Unknown"
+        user_username = f"@{user_entity.username}" if user_entity.username else "No username"
+    except:
+        user_name = "Unknown"
+        user_username = "Unknown"
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    caption = (
+        f"💳 **New Payment Request**\n"
+        f"👤 **User:** {user_name}\n"
+        f"🆔 **ID:** `{user_id}`\n"
+        f"🔗 **Username:** {user_username}\n"
+        f"📅 **Plan:** {plan.upper()}\n"
+        f"💰 **Amount:** {plan_price(plan)}\n"
+        f"⏰ **Time:** {now}"
+    )
+    
     # Forward the photo
     for owner in MY_OWNER_IDS:
         try:
@@ -602,25 +645,27 @@ async def purnjanam_handler(event):
     
     await safe_reply(event, f"✅ **पुनर्जन्म पूर्ण!**\n🔄 {count} userbots restart kiye gaye.")
 
-# ─── GIFT PREMIUM ──────────────────────────────────────────────────
+# ─── GIFT PREMIUM (UPDATED) ─────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/giftpremium"))
 async def gift_premium(event):
     if event.sender_id not in MY_OWNER_IDS:
         return
     args = event.text.strip().split()
     if len(args) < 3:
-        await safe_reply(event, "Usage: /giftpremium <user_id> <plan> (monthly/quarterly/yearly)")
+        await safe_reply(event, "Usage: /giftpremium <user_id> <days>")
         return
     try:
         user_id = int(args[1])
-        plan = args[2].lower()
-        if plan not in ["monthly","quarterly","yearly"]:
-            await safe_reply(event, "Invalid plan. Use monthly, quarterly, yearly.")
+        days = int(args[2])
+        if days <= 0:
+            await safe_reply(event, "Days must be a positive integer.")
             return
-        days = {"monthly":30, "quarterly":90, "yearly":365}[plan]
+        plan = f"{days} days"
         await add_premium_user(user_id, plan, days)
-        await safe_reply(event, f"✅ Premium gifted to {user_id} for {plan}.")
-        await safe_send_main(user_id, f"🎁 You have received a **{plan.upper()}** premium gift! Enjoy the features.")
+        await safe_reply(event, f"✅ Premium gifted to {user_id} for {days} days.")
+        await safe_send_main(user_id, f"🎁 You have received a premium gift of **{days} days**! Enjoy the features.")
+    except ValueError:
+        await safe_reply(event, "❌ Invalid user ID or days. Usage: /giftpremium <user_id> <days>")
     except Exception as e:
         await safe_reply(event, f"❌ Error: {e}")
 
@@ -733,7 +778,7 @@ async def run_user_bot_with_restart(session_string, chat_id):
                 except:
                     pass
             await asyncio.sleep(5)
-
+            
 # ─── FULL USERBOT ENGINE ──────────────────────────────────────────
 async def run_user_bot(session_string, chat_id):
     user_bot = None
@@ -6670,7 +6715,7 @@ async def main():
     await init_cipher()
 
     # Restore sessions
-    sessions = await load_sessions()
+    sessions = await load_sessions()  
     for uid, sess_str in sessions.items():
         try:
             asyncio.create_task(run_user_bot_with_restart(sess_str, uid))
