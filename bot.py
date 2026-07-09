@@ -31,9 +31,8 @@ API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 MY_OWNER_IDS = {int(x) for x in os.environ.get("OWNER_IDS", "8909378644,8711082433").split(",") if x.strip()}
-# ─── PREMIUM PAYMENT CONFIG ───
 UPI_ID = os.environ.get("UPI_ID", "paryush01@nyes")
-QR_IMAGE_PATH = os.environ.get("QR_IMAGE_PATH", "upi_qr.jpg")  # local file ya GitHub raw URL
+QR_IMAGE_PATH = os.environ.get("QR_IMAGE_PATH", "upi_qr.jpg")
 PREMIUM_FEATURES_LINK = os.environ.get("PREMIUM_FEATURES_LINK", "https://t.me/userbotsupport_ZA/20")
 
 # ─── CHANNEL VERIFICATION ───
@@ -43,7 +42,6 @@ REQUIRED_CHANNELS = [
     {"id": -1004452969098, "invite": "https://t.me/userbotsupport_ZA", "name": "Channel 3"},
 ]
 
-# ─── BROADCAST USERS STORAGE ───
 USERS_FILE = "broadcast_users.json"
 
 def load_users():
@@ -70,7 +68,7 @@ async def init_db():
         raise Exception("DATABASE_URL not set")
     db_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=5)
     async with db_pool.acquire() as conn:
-        # ─── user_sessions table ───
+        # user_sessions
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS user_sessions (
                 user_id BIGINT PRIMARY KEY,
@@ -78,14 +76,14 @@ async def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # ─── app_config table ───
+        # app_config
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS app_config (
                 key_name TEXT PRIMARY KEY,
                 key_value TEXT NOT NULL
             )
         """)
-        # ─── premium_users table (with all required columns) ───
+        # premium_users
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS premium_users (
                 user_id BIGINT PRIMARY KEY,
@@ -95,7 +93,7 @@ async def init_db():
                 status TEXT DEFAULT 'active'
             )
         """)
-        # ─── MIGRATION: Add missing columns if table already exists ───
+        # ─── MIGRATION: add missing columns ───
         await conn.execute("""
             DO $$
             BEGIN
@@ -117,7 +115,7 @@ async def init_db():
                 END IF;
             END $$;
         """)
-        # ─── premium_protections table ───
+        # premium_protections
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS premium_protections (
                 user_id BIGINT,
@@ -125,7 +123,7 @@ async def init_db():
                 PRIMARY KEY (user_id, command_name)
             )
         """)
-        # ─── user_wallet table ───
+        # user_wallet
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS user_wallet (
                 user_id BIGINT PRIMARY KEY,
@@ -141,10 +139,7 @@ async def get_encryption_key():
             return row['key_value']
         else:
             new_key = Fernet.generate_key().decode()
-            await conn.execute(
-                "INSERT INTO app_config (key_name, key_value) VALUES ($1, $2)",
-                "encryption_key", new_key
-            )
+            await conn.execute("INSERT INTO app_config (key_name, key_value) VALUES ($1, $2)", "encryption_key", new_key)
             return new_key
 
 async def init_cipher():
@@ -188,7 +183,7 @@ async def delete_session(user_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM user_sessions WHERE user_id = $1", user_id)
 
-# ─── WALLET FUNCTIONS ─────────────────────────────────────────────
+# ─── WALLET ────────────────────────────────────────────────────────
 async def get_balance(user_id: int) -> float:
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT balance FROM user_wallet WHERE user_id = $1", user_id)
@@ -210,7 +205,7 @@ async def deduct_balance(user_id: int, amount: float):
             UPDATE user_wallet SET balance = balance - $2, updated_at = CURRENT_TIMESTAMP WHERE user_id = $1
         """, user_id, amount)
 
-# ─── PREMIUM MANAGEMENT ─────────────────────────────────────────────
+# ─── PREMIUM ──────────────────────────────────────────────────────
 async def add_premium_user(user_id: int, plan: str, days: int):
     expiry = datetime.datetime.now() + datetime.timedelta(days=days)
     async with db_pool.acquire() as conn:
@@ -224,18 +219,13 @@ async def add_premium_user(user_id: int, plan: str, days: int):
 async def get_premium_user(user_id: int):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM premium_users WHERE user_id = $1", user_id)
-        if row:
-            return dict(row)
-        return None
+        return dict(row) if row else None
 
 async def check_premium_status(user_id: int):
     data = await get_premium_user(user_id)
-    if not data:
+    if not data or data['status'] != 'active':
         return None
-    if data['status'] != 'active':
-        return None
-    expiry = data['expiry_date']
-    if expiry < datetime.datetime.now():
+    if data['expiry_date'] < datetime.datetime.now():
         async with db_pool.acquire() as conn:
             await conn.execute("UPDATE premium_users SET status = 'expired' WHERE user_id = $1", user_id)
         return None
@@ -275,17 +265,17 @@ MAIN_BOT_CLIENT = TelegramClient("main_bot_session", API_ID, API_HASH)
 
 active_userbots = {}
 user_sessions = {}
-user_states = {}  # for login and payment flow
+user_states = {}       # for login and payment flow
+temp_clients = {}      # temporary clients during login (phone -> client)
 
-print("🚀 Main Bot started with Admin Logger Engine...")
-print("DEBUG: MAIN_BOT_CLIENT type =", type(MAIN_BOT_CLIENT))
+print("🚀 Main Bot started...")
 
 async def is_user_in_channel(user_id, channel_data):
     try:
         channel = await MAIN_BOT_CLIENT.get_entity(channel_data["id"])
         await MAIN_BOT_CLIENT.get_permissions(channel, user_id)
         return True
-    except Exception:
+    except:
         return False
 
 def get_join_buttons():
@@ -296,10 +286,10 @@ def get_join_buttons():
     return buttons
 
 async def shutdown_handler(sig, frame):
-    print("🛑 Shutting down gracefully...")
+    print("🛑 Shutting down...")
     for uid in broadcast_users:
         try:
-            await MAIN_BOT_CLIENT.send_message(uid, "⚠️ **Bot is going offline for maintenance/restart.**\nWe'll be back soon!")
+            await MAIN_BOT_CLIENT.send_message(uid, "⚠️ Bot is going offline for maintenance.\nWe'll be back soon!")
             await asyncio.sleep(0.5)
         except:
             pass
@@ -319,10 +309,10 @@ async def safe_reply(event, text, buttons=None, **kwargs):
         return await event.reply(text, buttons=buttons, **kwargs)
     except FloodWaitError as e:
         wait = e.seconds + 1
-        print(f"⏳ Main bot flood wait: {wait}s")
+        print(f"⏳ Flood wait: {wait}s")
         await asyncio.sleep(wait)
         return await event.reply(text, buttons=buttons, **kwargs)
-    except Exception:
+    except:
         return None
 
 async def safe_respond(event, text, **kwargs):
@@ -330,10 +320,9 @@ async def safe_respond(event, text, **kwargs):
         return await event.respond(text, **kwargs)
     except FloodWaitError as e:
         wait = e.seconds + 1
-        print(f"⏳ Main bot flood wait: {wait}s")
         await asyncio.sleep(wait)
         return await event.respond(text, **kwargs)
-    except Exception:
+    except:
         return None
 
 async def safe_edit(event, text, buttons=None, **kwargs):
@@ -341,12 +330,11 @@ async def safe_edit(event, text, buttons=None, **kwargs):
         return await event.edit(text, buttons=buttons, **kwargs)
     except FloodWaitError as e:
         wait = e.seconds + 1
-        print(f"⏳ Main bot flood wait: {wait}s")
         await asyncio.sleep(wait)
         return await event.edit(text, buttons=buttons, **kwargs)
     except MessageNotModifiedError:
         pass
-    except Exception:
+    except:
         return None
 
 async def safe_send_main(chat, text, **kwargs):
@@ -354,10 +342,9 @@ async def safe_send_main(chat, text, **kwargs):
         return await MAIN_BOT_CLIENT.send_message(chat, text, **kwargs)
     except FloodWaitError as e:
         wait = e.seconds + 1
-        print(f"⏳ Main bot flood wait: {wait}s")
         await asyncio.sleep(wait)
         return await MAIN_BOT_CLIENT.send_message(chat, text, **kwargs)
-    except Exception:
+    except:
         return None
 
 def plan_price(plan):
@@ -366,7 +353,8 @@ def plan_price(plan):
 def plan_price_str(plan):
     return f"₹{plan_price(plan)}"
 
-# ─── MAIN BOT HANDLERS ─────────────────────────────────────────────
+# ─── MAIN HANDLERS ──────────────────────────────────────────────
+
 @MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/start"))
 async def start_handler(event):
     user_id = event.sender_id
@@ -404,7 +392,7 @@ async def login_handler(event):
             not_joined.append(ch)
 
     if not_joined:
-        msg = "❌ **You must join all the following channels first:**\n\n"
+        msg = "❌ **You must join all channels first:**\n\n"
         for ch in not_joined:
             msg += f"• {ch['name']} ({ch['invite']})\n"
         msg += "\nAfter joining, click the **'✅ I have joined all'** button below."
@@ -419,6 +407,119 @@ async def login_handler(event):
         "Example: `+919876543210`"
     )
 
+# ─── HANDLE PHONE NUMBER INPUT ──────────────────────────────────
+@MAIN_BOT_CLIENT.on(events.NewMessage)
+async def handle_login_phone(event):
+    if event.chat_id != event.sender_id:
+        return  # only private
+    user_id = event.sender_id
+    state = user_states.get(user_id)
+    if not state or state.get("step") != "NUMBER":
+        return
+
+    phone = event.raw_text.strip()
+    # Basic validation: should contain digits and maybe '+'
+    if not re.match(r'^\+?\d{7,15}$', phone):
+        await safe_reply(event, "❌ Invalid phone number. Please send with country code, e.g., `+919876543210`")
+        return
+
+    # Create a temporary client to send the code request
+    try:
+        temp_client = TelegramClient(StringSession(), API_ID, API_HASH)
+        await temp_client.connect()
+        # Send code request
+        await temp_client.send_code_request(phone)
+        # Store the temporary client and phone in state
+        user_states[user_id]["step"] = "CODE"
+        user_states[user_id]["phone"] = phone
+        user_states[user_id]["temp_client"] = temp_client
+        await safe_reply(event, "📨 **Code sent!** Please check your Telegram app for the login code.\n\nSend the code as a number (e.g., `12345`).")
+    except Exception as e:
+        await safe_reply(event, f"❌ Failed to send code: {str(e)}")
+        user_states.pop(user_id, None)
+        try:
+            await temp_client.disconnect()
+        except:
+            pass
+
+# ─── HANDLE CODE INPUT ──────────────────────────────────────────
+@MAIN_BOT_CLIENT.on(events.NewMessage)
+async def handle_login_code(event):
+    if event.chat_id != event.sender_id:
+        return
+    user_id = event.sender_id
+    state = user_states.get(user_id)
+    if not state or state.get("step") != "CODE":
+        return
+
+    code = event.raw_text.strip()
+    if not code.isdigit():
+        await safe_reply(event, "❌ Please send only the numeric code.")
+        return
+
+    temp_client = state.get("temp_client")
+    phone = state.get("phone")
+    if not temp_client or not phone:
+        await safe_reply(event, "❌ Login session expired. Please start again with `/login`.")
+        user_states.pop(user_id, None)
+        return
+
+    try:
+        # Complete the sign-in
+        await temp_client.sign_in(phone, code=code)
+        # Get session string
+        session_str = temp_client.session.save()
+        # Save session to database
+        await save_session(user_id, session_str)
+        # Start the userbot in background
+        asyncio.create_task(run_user_bot_with_restart(session_str, user_id))
+        await safe_reply(event, "✅ **Userbot started successfully!**\nYou can now use it in groups.\nType `.menu` to see commands.")
+        # Cleanup
+        user_states.pop(user_id, None)
+        await temp_client.disconnect()
+    except SessionPasswordNeededError:
+        # 2FA password needed
+        state["step"] = "PASSWORD"
+        state["temp_client"] = temp_client
+        await safe_reply(event, "🔐 **Two-factor authentication is enabled.**\nPlease send your 2FA password.")
+    except Exception as e:
+        await safe_reply(event, f"❌ Login failed: {str(e)}")
+        user_states.pop(user_id, None)
+        try:
+            await temp_client.disconnect()
+        except:
+            pass
+
+# ─── HANDLE 2FA PASSWORD ────────────────────────────────────────
+@MAIN_BOT_CLIENT.on(events.NewMessage)
+async def handle_login_password(event):
+    if event.chat_id != event.sender_id:
+        return
+    user_id = event.sender_id
+    state = user_states.get(user_id)
+    if not state or state.get("step") != "PASSWORD":
+        return
+
+    password = event.raw_text.strip()
+    temp_client = state.get("temp_client")
+    if not temp_client:
+        await safe_reply(event, "❌ Session expired. Please start again with `/login`.")
+        user_states.pop(user_id, None)
+        return
+
+    try:
+        await temp_client.sign_in(password=password)
+        session_str = temp_client.session.save()
+        await save_session(user_id, session_str)
+        asyncio.create_task(run_user_bot_with_restart(session_str, user_id))
+        await safe_reply(event, "✅ **Userbot started successfully!**")
+        user_states.pop(user_id, None)
+        await temp_client.disconnect()
+    except Exception as e:
+        await safe_reply(event, f"❌ Invalid password: {str(e)}")
+        # Allow retry; keep state
+
+# ─── CALLBACK QUERY HANDLER ─────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.CallbackQuery)
 async def callback_handler(event):
     data = event.data.decode()
@@ -458,7 +559,6 @@ async def callback_handler(event):
         if event.chat_id != user_id:
             await event.answer("Please use this in private chat.", alert=True)
             return
-        # Show deposit instructions and QR
         caption = (
             "💰 **Deposit Funds**\n\n"
             "1. Scan the QR below or use UPI: `{UPI_ID}`\n"
@@ -502,11 +602,9 @@ async def callback_handler(event):
         user_id = event.sender_id
         if user_id not in user_states:
             user_states[user_id] = {}
-        # Check wallet balance
         price = plan_price(plan)
         bal = await get_balance(user_id)
         if bal < price:
-            # Insufficient balance
             msg = (
                 f"❌ **Insufficient Balance!**\n\n"
                 f"Your wallet balance: ₹{bal:.2f}\n"
@@ -517,7 +615,6 @@ async def callback_handler(event):
             buttons = [[types.KeyboardButtonCallback("💰 Deposit Now", data="deposit")]]
             await safe_edit(event, msg, buttons=buttons)
             return
-        # Sufficient balance: deduct and activate premium
         try:
             await deduct_balance(user_id, price)
         except ValueError as e:
@@ -528,41 +625,35 @@ async def callback_handler(event):
         await safe_edit(event, f"✅ **Premium activated!**\nPlan: {plan.upper()}\nValid for {days} days.\nBalance deducted: ₹{price:.2f}")
         await safe_send_main(user_id, f"🎉 **Your premium subscription has been activated!**\nPlan: {plan.upper()}\nExpires: {datetime.datetime.now() + datetime.timedelta(days=days)}")
         await MAIN_BOT_CLIENT.send_message(user_id, "You can now use all premium commands in your userbot. Type `.menu11` to see them.")
-        # Clear state
         user_states.pop(user_id, None)
 
     elif data.startswith("approve_deposit_"):
-        # format: approve_deposit_userid_amount
         parts = data.split("_")
         if len(parts) != 4:
             return
         _, _, user_id_str, amount_str = parts
         user_id = int(user_id_str)
         amount = float(amount_str)
-        owner_id = event.sender_id
-        if owner_id not in MY_OWNER_IDS:
+        if event.sender_id not in MY_OWNER_IDS:
             await event.answer("❌ Not authorized.", alert=True)
             return
         await add_balance(user_id, amount)
         await event.edit(f"✅ Deposit of ₹{amount:.2f} approved for user {user_id}")
-        await safe_send_main(user_id, f"✅ Your deposit of ₹{amount:.2f} has been credited to your wallet.\nNew balance: ₹{await get_balance(user_id):.2f}")
+        await safe_send_main(user_id, f"✅ Your deposit of ₹{amount:.2f} has been credited.\nNew balance: ₹{await get_balance(user_id):.2f}")
 
     elif data.startswith("reject_deposit_"):
         _, _, user_id_str = data.split("_")
         user_id = int(user_id_str)
-        owner_id = event.sender_id
-        if owner_id not in MY_OWNER_IDS:
+        if event.sender_id not in MY_OWNER_IDS:
             await event.answer("❌ Not authorized.", alert=True)
             return
         await event.edit(f"❌ Deposit rejected for user {user_id}")
         await safe_send_main(user_id, "❌ Your deposit was rejected. Please try again or contact support.")
 
     elif data.startswith("approve_"):
-        # Legacy approve for premium purchase (manual payment)
         _, user_id_str, plan = data.split("_")
         user_id = int(user_id_str)
-        owner_id = event.sender_id
-        if owner_id not in MY_OWNER_IDS:
+        if event.sender_id not in MY_OWNER_IDS:
             await event.answer("❌ Not authorized.", alert=True)
             return
         days = {"monthly":30, "quarterly":90, "yearly":365}[plan]
@@ -572,11 +663,9 @@ async def callback_handler(event):
         await MAIN_BOT_CLIENT.send_message(user_id, "You can now use all premium commands in your userbot. Type `.menu11` to see them.")
 
     elif data.startswith("reject_"):
-        # Legacy reject
         _, user_id_str = data.split("_")
         user_id = int(user_id_str)
-        owner_id = event.sender_id
-        if owner_id not in MY_OWNER_IDS:
+        if event.sender_id not in MY_OWNER_IDS:
             await event.answer("❌ Not authorized.", alert=True)
             return
         await event.edit(f"❌ Payment rejected for user {user_id}")
@@ -625,30 +714,28 @@ async def deposit_cmd(event):
         print(f"Deposit QR send error: {e}")
     user_states[user_id] = {"step": "waiting_deposit"}
 
+# ─── HANDLE DEPOSIT SCREENSHOTS & PAYMENT ──────────────────────
 @MAIN_BOT_CLIENT.on(events.NewMessage)
 async def payment_handler(event):
     if event.chat_id != event.sender_id:
-        return  # not private
+        return
     user_id = event.sender_id
     state = user_states.get(user_id, {})
     step = state.get("step")
 
-    # Handle deposit screenshot
+    # Deposit screenshot
     if step == "waiting_deposit":
         if not event.photo:
             await safe_reply(event, "❌ Please send a screenshot image of the deposit transaction.")
             return
-        # Extract amount from caption
         caption_text = event.raw_text or ""
         amount = None
-        # Try to extract a number from caption (simple regex)
         match = re.search(r'(\d+(\.\d+)?)', caption_text)
         if match:
             amount = float(match.group(1))
         if amount is None or amount <= 0:
             await safe_reply(event, "❌ Please include the amount you paid in the caption.\nExample: `I paid ₹100`")
             return
-        # Forward to owners with approve/reject buttons for deposit
         try:
             user_entity = await MAIN_BOT_CLIENT.get_entity(user_id)
             user_name = user_entity.first_name or "Unknown"
@@ -680,16 +767,14 @@ async def payment_handler(event):
             except Exception as e:
                 print(f"Failed to forward deposit to owner {owner}: {e}")
         await safe_reply(event, "✅ Your deposit screenshot has been sent for verification. You will receive confirmation shortly.")
-        # Keep state to avoid multiple submissions? We can clear after owner approval or keep.
         return
 
-    # Handle legacy premium purchase (manual payment) – if user is in waiting_payment
+    # Legacy payment (manual)
     if step == "waiting_payment":
         if not event.photo:
             await safe_reply(event, "❌ Please send a screenshot image of the payment.")
             return
         plan = state.get("plan", "monthly")
-        # Get user details
         try:
             user_entity = await MAIN_BOT_CLIENT.get_entity(user_id)
             user_name = user_entity.first_name or "Unknown"
@@ -722,10 +807,9 @@ async def payment_handler(event):
             except Exception as e:
                 print(f"Failed to forward to owner {owner}: {e}")
         await safe_reply(event, "✅ Your payment screenshot has been sent for verification. You will receive confirmation shortly.")
-        # Clear state so they don't send again
         user_states.pop(user_id, None)
 
-# ─── BROADCAST COMMAND ──────────────────────────────────────────────
+# ─── BROADCAST ─────────────────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/broadcast"))
 async def broadcast_cmd(event):
     if event.sender_id not in MY_OWNER_IDS:
@@ -752,7 +836,7 @@ async def listusers_cmd(event):
     ids = "\n".join(f"• `{uid}`" for uid in sorted(broadcast_users))
     await event.reply(f"👥 **Registered Users** ({len(broadcast_users)}):\n{ids}")
 
-# ─── LOGOUT COMMAND ──────────────────────────────────────────────
+# ─── LOGOUT ──────────────────────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/logout"))
 async def logout_handler(event):
     user_id = event.sender_id
@@ -789,14 +873,12 @@ async def logout_handler(event):
         user_sessions.pop(user_id, None)
         await delete_session(user_id)
 
-# ─── HIDDEN PURNJANAM COMMAND ────────────────────────────────────
+# ─── PURNJANAM ──────────────────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/purnjanam"))
 async def purnjanam_handler(event):
     if event.sender_id not in MY_OWNER_IDS:
         return
-    
     await safe_reply(event, "🌀 **पुनर्जन्म**...\n⏳ Userbot restart ho raha hai...")
-    
     count = 0
     for uid, session_str in list(user_sessions.items()):
         try:
@@ -806,16 +888,14 @@ async def purnjanam_handler(event):
                 except:
                     pass
                 del active_userbots[uid]
-            
             asyncio.create_task(run_user_bot_with_restart(session_str, uid))
             count += 1
             await asyncio.sleep(1)
         except Exception as e:
             print(f"Purnjanam error for {uid}: {e}")
-    
     await safe_reply(event, f"✅ **पुनर्जन्म पूर्ण!**\n🔄 {count} userbots restart kiye gaye.")
 
-# ─── GIFT PREMIUM ──────────────────────────────────────────────────
+# ─── GIFT PREMIUM ──────────────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/giftpremium"))
 async def gift_premium(event):
     if event.sender_id not in MY_OWNER_IDS:
@@ -848,7 +928,7 @@ async def gift_premium(event):
     except Exception as e:
         await safe_reply(event, f"❌ Error: {e}")
 
-# ─── SUPERVISED USERBOT LAUNCHER ──────────────────────────────────
+# ─── SUPERVISED USERBOT LAUNCHER ──────────────────────────────
 async def run_user_bot_with_restart(session_string, chat_id):
     restart_count = 0
     last_restart_time = 0
@@ -957,7 +1037,7 @@ async def run_user_bot_with_restart(session_string, chat_id):
                 except:
                     pass
             await asyncio.sleep(5)
-
+            
 # ─── FULL USERBOT ENGINE ──────────────────────────────────────────
 async def run_user_bot(session_string, chat_id):
     user_bot = None
