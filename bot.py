@@ -450,7 +450,7 @@ async def handle_login_phone(event):
     phone = re.sub(r'[\s\-\(\)]', '', phone)
     
     if not re.match(r'^\+?\d{7,15}$', phone):
-        await safe_reply(event, "❌ Invalid phone number. Please send with country code, e.g., `+919876543210`")
+        await safe_reply(event, "❌ Invalid phone number format. Please send with country code, e.g., `+919876543210`")
         return
 
     try:
@@ -461,6 +461,16 @@ async def handle_login_phone(event):
         user_states[user_id]["phone"] = phone
         user_states[user_id]["temp_client"] = temp_client
         await safe_reply(event, "📨 **Code sent!** Please send the numeric code (e.g., `12345` or `1 2 3 4 5`).")
+    except ValueError as e:
+        await safe_reply(event, f"❌ Invalid phone number: {str(e)}. Check the number and country code.")
+        user_states.pop(user_id, None)
+        try:
+            await temp_client.disconnect()
+        except:
+            pass
+    except FloodWaitError as e:
+        await safe_reply(event, f"⏳ Too many requests. Please wait {e.seconds} seconds and try again.")
+        user_states.pop(user_id, None)
     except Exception as e:
         await safe_reply(event, f"❌ Failed to send code: {str(e)}")
         user_states.pop(user_id, None)
@@ -505,20 +515,23 @@ async def handle_login_code(event):
     except SessionPasswordNeededError:
         state["step"] = "PASSWORD"
         await safe_reply(event, "🔐 **Two-factor authentication is enabled.**\nPlease send your 2FA password.")
+        # Keep state, do NOT pop
     except FloodWaitError as e:
         wait = e.seconds + 1
         await safe_reply(event, f"⏳ Too many attempts. Please wait **{wait} seconds** and try again.")
+        # Keep state, allow retry
     except Exception as e:
         error_msg = str(e)
         if "code invalid" in error_msg.lower() or "invalid code" in error_msg.lower():
-            await safe_reply(event, "❌ Invalid code. Please check and try again.\nSend the code again (e.g., `12345`).")
+            await safe_reply(event, "❌ **Invalid code.** Please check and try again.\nSend the code again (e.g., `12345`).")
+            # Keep state, allow retry
         else:
             await safe_reply(event, f"❌ Login failed: {error_msg}")
             user_states.pop(user_id, None)
-        try:
-            await temp_client.disconnect()
-        except:
-            pass
+            try:
+                await temp_client.disconnect()
+            except:
+                pass
 
 # ─── 2FA PASSWORD HANDLER ─────────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.NewMessage)
@@ -544,14 +557,26 @@ async def handle_login_password(event):
         session_str = temp_client.session.save()
         await save_session(user_id, session_str)
         asyncio.create_task(run_user_bot_with_restart(session_str, user_id))
-        await safe_reply(event, "✅ **Userbot started successfully!**")
+        await safe_reply(event, "✅ **Userbot started successfully!**\nYou can now use it in groups.\nType `.menu` to see commands.")
         user_states.pop(user_id, None)
         await temp_client.disconnect()
     except FloodWaitError as e:
         wait = e.seconds + 1
-        await safe_reply(event, f"⏳ Too many attempts. Please wait **{wait} seconds** and try again.")
+        await safe_reply(event, f"⏳ Too many incorrect attempts. Please wait **{wait} seconds** and try again.")
+        # Keep state, do NOT pop
     except Exception as e:
-        await safe_reply(event, f"❌ Invalid password: {str(e)}")
+        error_msg = str(e)
+        # If it's a password error, keep state so user can retry
+        if "password" in error_msg.lower() and ("invalid" in error_msg.lower() or "hash" in error_msg.lower()):
+            await safe_reply(event, "❌ **Incorrect 2FA password.** Please try again.\n\nSend your correct 2FA password.")
+            # Keep state, do NOT pop, keep temp_client connected
+        else:
+            await safe_reply(event, f"❌ Login failed: {error_msg}")
+            user_states.pop(user_id, None)
+            try:
+                await temp_client.disconnect()
+            except:
+                pass
 
 # ─── CALLBACK QUERY HANDLER ───────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.CallbackQuery)
@@ -4277,7 +4302,7 @@ async def run_user_bot(session_string, chat_id):
 
         # ─── SPAM COMMANDS ────────────────────────────────────────────────────────
 
-        @register_cmd("spray")
+               @register_cmd("spray")
         async def cmd_spray(event, arg):
             if not arg: return
             count = None
@@ -4290,6 +4315,15 @@ async def run_user_bot(session_string, chat_id):
                 text = parts[1] if len(parts) > 1 else ""
                 if not text: return
             chat = event.chat_id
+            target_user = None
+            if event.is_reply:
+                reply = await event.get_reply_message()
+                if reply:
+                    target_user = reply.sender_id
+                    # 🛡️ PROTECTION CHECK
+                    if target_user and await is_protected(target_user, "spray"):
+                        await safe_edit(event, "🚫 This user is protected from Spray.")
+                        return
             if chat in user_bot.spray_tasks and not user_bot.spray_tasks[chat].done():
                 return
             await safe_edit(event, f"⚡ Spray starting{' (' + str(count) + ' msgs)' if count else ' (infinite)'}...")
@@ -4298,6 +4332,10 @@ async def run_user_bot(session_string, chat_id):
                 try:
                     while chat in user_bot.spray_tasks:
                         if count is not None and sent >= count:
+                            break
+                        # re-check protection every 20 messages
+                        if target_user and sent % 20 == 0 and await is_protected(target_user, "spray"):
+                            await safe_send(chat, "🛑 Target is now protected. Stopping Spray.")
                             break
                         await safe_send(chat, text)
                         sent += 1
@@ -4447,10 +4485,16 @@ async def run_user_bot(session_string, chat_id):
                 if count > 1000: count = 1000
             chat = event.chat_id
             target_msg_id = None
+            target_user = None
             if event.is_reply:
                 reply = await event.get_reply_message()
                 if reply:
                     target_msg_id = reply.id
+                    target_user = reply.sender_id
+                    # 🛡️ PROTECTION CHECK
+                    if target_user and await is_protected(target_user, "multispray"):
+                        await safe_edit(event, "🚫 This user is protected from MultiSpray.")
+                        return
             if chat in user_bot.spray_tasks and not user_bot.spray_tasks[chat].done():
                 return await safe_edit(event, "⚠️ Already spraying")
             await safe_edit(event, f"🔄 MultiSpray starting{' with reply' if target_msg_id else ''}..."
@@ -4461,6 +4505,10 @@ async def run_user_bot(session_string, chat_id):
                 try:
                     while chat in user_bot.spray_tasks:
                         if count is not None and sent >= count:
+                            break
+                        # re-check protection every 20 messages
+                        if target_user and sent % 20 == 0 and await is_protected(target_user, "multispray"):
+                            await safe_send(chat, "🛑 Target is now protected. Stopping MultiSpray.")
                             break
                         txt = user_bot.spam_texts[i % len(user_bot.spam_texts)]
                         i += 1
@@ -4492,6 +4540,17 @@ async def run_user_bot(session_string, chat_id):
                 return await safe_edit(event, "❌ Count must be 1-500")
             text = parts[1]
             chat = event.chat_id
+            target_msg_id = None
+            target_user = None
+            if event.is_reply:
+                reply = await event.get_reply_message()
+                if reply:
+                    target_msg_id = reply.id
+                    target_user = reply.sender_id
+                    # 🛡️ PROTECTION CHECK
+                    if target_user and await is_protected(target_user, "countspray"):
+                        await safe_edit(event, "🚫 This user is protected from CountSpray.")
+                        return
             if chat in user_bot.spray_tasks and not user_bot.spray_tasks[chat].done():
                 return await safe_edit(event, "⚠️ Already spraying")
             await safe_edit(event, f"🎯 CountSpray starting ({count} messages)...")
@@ -4499,7 +4558,11 @@ async def run_user_bot(session_string, chat_id):
                 sent = 0
                 try:
                     while sent < count and chat in user_bot.spray_tasks:
-                        await safe_send(chat, text)
+                        # re-check protection every 20 messages
+                        if target_user and sent % 20 == 0 and await is_protected(target_user, "countspray"):
+                            await safe_send(chat, "🛑 Target is now protected. Stopping CountSpray.")
+                            break
+                        await safe_send(chat, text, reply_to=target_msg_id if target_msg_id else None)
                         sent += 1
                         if sent % 30 == 0:
                             await asyncio.sleep(3)
@@ -4536,15 +4599,19 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_mute(event, arg):
             targets = await get_targets(event, arg)
             if not targets: return
-            added, already = [], []
+            added, already, protected = [], [], []
             for uid in targets:
+                if await is_protected(uid, "mute"):
+                    protected.append(str(uid))
+                    continue
                 if uid in user_bot.muted_users:
                     already.append(str(uid))
                 else:
                     user_bot.muted_users.add(uid); added.append(str(uid))
             msg = ""
             if added: msg += f"🔇 Muted: {', '.join(added)}\n"
-            if already: msg += f"⚠️ Already muted: {', '.join(already)}"
+            if already: msg += f"⚠️ Already muted: {', '.join(already)}\n"
+            if protected: msg += f"🛡️ Protected (skip): {', '.join(protected)}"
             if not msg: msg = "❌ No changes"
             await safe_edit(event, msg)
 
@@ -4568,15 +4635,19 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_gmute(event, arg):
             targets = await get_targets(event, arg)
             if not targets: return
-            added, already = [], []
+            added, already, protected = [], [], []
             for uid in targets:
+                if await is_protected(uid, "gmute"):
+                    protected.append(str(uid))
+                    continue
                 if uid in user_bot.global_muted:
                     already.append(str(uid))
                 else:
                     user_bot.global_muted.add(uid); added.append(str(uid))
             msg = ""
             if added: msg += f"🔕 Gmuted: {', '.join(added)}\n"
-            if already: msg += f"⚠️ Already gmuted: {', '.join(already)}"
+            if already: msg += f"⚠️ Already gmuted: {', '.join(already)}\n"
+            if protected: msg += f"🛡️ Protected (skip): {', '.join(protected)}"
             if not msg: msg = "❌ No changes"
             await safe_edit(event, msg)
 
@@ -4688,11 +4759,14 @@ async def run_user_bot(session_string, chat_id):
                     return
             except:
                 return
-            kicked, failed, skipped = [], [], []
+            kicked, failed, skipped, protected = [], [], [], []
             me2 = await user_bot.get_me()
             for uid in targets:
                 if uid == me2.id:
                     skipped.append(str(uid)); continue
+                if await is_protected(uid, "throw"):
+                    protected.append(str(uid))
+                    continue
                 try:
                     await user_bot.kick_participant(event.chat_id, uid)
                     kicked.append(str(uid))
@@ -4701,6 +4775,7 @@ async def run_user_bot(session_string, chat_id):
             msg = ""
             if kicked: msg += f"👞 Kicked: {', '.join(kicked)}\n"
             if failed: msg += f"⚠️ Failed: {', '.join(failed)}\n"
+            if protected: msg += f"🛡️ Protected (skip): {', '.join(protected)}\n"
             if skipped: msg += f"👑 Self skip: {', '.join(skipped)}"
             if not msg: msg = "❌ No action"
             await safe_edit(event, msg)
@@ -6398,54 +6473,58 @@ async def run_user_bot(session_string, chat_id):
 
         # ─── DEATHGOD ────────────────────────────────────────────────────────────
 
-        @register_cmd("deathgod")
-        async def cmd_deathgod(event, arg):
-            chat = event.chat_id
-            count = None
-            if arg and arg.strip().isdigit():
-                count = int(arg.strip())
-                if count < 1: count = 1
-                if count > 1000: count = 1000
-            reply_to = None
-            if event.is_reply:
-                reply = await event.get_reply_message()
-                if reply:
-                    reply_to = reply.id
-            if chat in user_bot.spray_tasks and not user_bot.spray_tasks[chat].done():
-                return
-            await safe_edit(event, f"☠️ Deathgod started{' with reply' if reply_to else ''}{' (' + str(count) + ' msgs)' if count else ' (infinite)'}...")
-            async def loop():
-                sent = 0
-                try:
-                    while chat in user_bot.spray_tasks:
-                        if count is not None and sent >= count:
-                            break
-                        txt = random.choice(deathgod_replies)
-                        sent += 1
-                        await safe_send(chat, txt, reply_to=reply_to)
-                        if sent % 30 == 0:
-                            await asyncio.sleep(3)
-                        await asyncio.sleep(user_bot.SPRAY_DELAY)
-                except asyncio.CancelledError:
-                    pass
-                finally:
-                    user_bot.spray_tasks.pop(chat, None)
-                    if sent > 0:
-                        await safe_send(chat, f"☠️ Deathgod done: {sent} messages sent.")
-            user_bot.spray_tasks[chat] = asyncio.create_task(loop())
-            await safe_edit(event, f"☠️ Deathgod started{' with reply' if reply_to else ''}{' (' + str(count) + ' msgs)' if count else ' (infinite)'}")
+      @register_cmd("deathgod")
+async def cmd_deathgod(event, arg):
+    chat = event.chat_id
+    count = None
+    if arg and arg.strip().isdigit():
+        count = int(arg.strip())
+        if count < 1: count = 1
+        if count > 1000: count = 1000
 
-        @register_cmd("sdeathgod")
-        async def cmd_sdeathgod(event, _):
-            chat = event.chat_id
-            if chat not in user_bot.spray_tasks:
+    reply_to = None
+    target_user = None
+
+    if event.is_reply:
+        reply = await event.get_reply_message()
+        if reply:
+            reply_to = reply.id
+            target_user = reply.sender_id
+            # 🛡️ PREMIUM PROTECTION CHECK
+            if target_user and await is_protected(target_user, "deathgod"):
+                await safe_edit(event, "🚫 This user is protected from Deathgod.")
                 return
-            try:
-                user_bot.spray_tasks[chat].cancel()
-            except:
-                pass
+
+    if chat in user_bot.spray_tasks and not user_bot.spray_tasks[chat].done():
+        return
+
+    await safe_edit(event, f"☠️ Deathgod started{' with reply' if reply_to else ''}{' (' + str(count) + ' msgs)' if count else ' (infinite)'}...")
+
+    async def loop():
+        sent = 0
+        try:
+            while chat in user_bot.spray_tasks:
+                if count is not None and sent >= count:
+                    break
+                # Optional: re-check every 10 messages (if premium added later)
+                if target_user and sent % 10 == 0 and await is_protected(target_user, "deathgod"):
+                    await safe_send(chat, "🛑 Target is now protected. Stopping Deathgod.")
+                    break
+                txt = random.choice(deathgod_replies)
+                sent += 1
+                await safe_send(chat, txt, reply_to=reply_to)
+                if sent % 30 == 0:
+                    await asyncio.sleep(3)
+                await asyncio.sleep(user_bot.SPRAY_DELAY)
+        except asyncio.CancelledError:
+            pass
+        finally:
             user_bot.spray_tasks.pop(chat, None)
-            await safe_edit(event, "🛑 Deathgod stopped.")
+            if sent > 0:
+                await safe_send(chat, f"☠️ Deathgod done: {sent} messages sent.")
+
+    user_bot.spray_tasks[chat] = asyncio.create_task(loop())
+    await safe_edit(event, f"☠️ Deathgod started{' with reply' if reply_to else ''}{' (' + str(count) + ' msgs)' if count else ' (infinite)'}")
 
         # ─── DISPATCHER (modified to check premium) ──────────────────────────
         @user_bot.on(events.NewMessage)
