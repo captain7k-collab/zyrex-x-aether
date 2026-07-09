@@ -6660,7 +6660,8 @@ def run_web():
 if __name__ == "__main__":
     print("🚀 Main bot starting with Web Server (Waitress)...")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     loop.run_until_complete(init_db())
     loop.run_until_complete(init_cipher())
 
@@ -6675,7 +6676,7 @@ if __name__ == "__main__":
 
     # Start web server in a separate thread (Waitress is blocking)
     threading.Thread(target=run_web, daemon=True).start()
-    
+
     # Start the bot
     loop.run_until_complete(main_bot.start(bot_token=BOT_TOKEN))
     print("✅ Bot is running. Press Ctrl+C to stop.")
