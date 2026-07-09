@@ -1,6 +1,4 @@
-[file name]: ol;d bot copy.py
-[file content begin]
-.import asyncio
+import asyncio
 import os
 import time
 import json
@@ -424,7 +422,7 @@ async def callback_handler(event):
             buttons=buttons
         )
         print(f"QR send error: {e}")
-        
+
     elif data.startswith("approve_"):
         # owner approval
         _, user_id_str, plan = data.split("_")
