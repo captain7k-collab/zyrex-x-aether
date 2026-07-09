@@ -3342,12 +3342,12 @@ async def run_user_bot(session_string, chat_id):
             # Simulate shadow with bold italic
             await safe_edit(event, f"**SHADOW**\n━━━━━━━━━━━━━━━\n***{arg}***")
 
-     @register_cmd("zalgo", premium=True)
-     async def cmd_zalgo(event, arg):
-        # Simple zalgo: add diacritics
-        diacritics = r"̴̵̶̷̸̡̢̧̨̛̖̗̘̙̜̝̞̟̠̣̤̥̦̩̪̫̬̭̮̯̰̱̲̳̹̺̻̼͇͈͉͍͎̀́̂̃̄̅̆̇̈̉̊̋̌̍̎̏̐̑̒̓̔̽̾̿̀́͂̓̈́͆͊͋͌̕̚ͅ͏͓͔͕͖͙͚͐͑͒͗͛ͣͤͥͦͧͨͩͪͫͬͭͮͯ͘͜͟͢͝͞͠͡"
-        zalgo = ''.join(c + ''.join(random.choice(diacritics) for _ in range(random.randint(1, 3))) for c in arg)
-        await safe_edit(event, f"**ZALGO**\n━━━━━━━━━━━━━━━\n{zalgo}")
+        @register_cmd("zalgo", premium=True)
+        async def cmd_zalgo(event, arg):
+            # Simple zalgo: add diacritics
+            diacritics = r"̴̵̶̷̸̡̢̧̨̛̖̗̘̙̜̝̞̟̠̣̤̥̦̩̪̫̬̭̮̯̰̱̲̳̹̺̻̼͇͈͉͍͎̀́̂̃̄̅̆̇̈̉̊̋̌̍̎̏̐̑̒̓̔̽̾̿̀́͂̓̈́͆͊͋͌̕̚ͅ͏͓͔͕͖͙͚͐͑͒͗͛ͣͤͥͦͧͨͩͪͫͬͭͮͯ͘͜͟͢͝͞͠͡"
+            zalgo = ''.join(c + ''.join(random.choice(diacritics) for _ in range(random.randint(1, 3))) for c in arg)
+            await safe_edit(event, f"**ZALGO**\n━━━━━━━━━━━━━━━\n{zalgo}")
 
         @register_cmd("leet", premium=True)
         async def cmd_leet(event, arg):
