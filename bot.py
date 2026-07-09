@@ -988,7 +988,7 @@ async def run_user_bot_with_restart(session_string, chat_id):
     while True:
         try:
             await run_user_bot(session_string, chat_id)
-            break
+            break  # normal exit
         except FloodWaitError as e:
             wait = e.seconds + 1
             print(f"⏳ Userbot flood wait: {wait}s. Sleeping...")
@@ -1003,51 +1003,17 @@ async def run_user_bot_with_restart(session_string, chat_id):
             session_invalid_notified = False
         except (UnauthorizedError, ValueError, RPCError) as e:
             error_msg = str(e)
-            print(f"❌ Session invalid for user {chat_id} – stopping restart loop.")
-            if not session_invalid_notified:
-                session_invalid_notified = True
-                try:
-                    await MAIN_BOT_CLIENT.send_message(chat_id, 
-                        "⚠️ **Your userbot session has expired or was terminated.**\n\n"
-                        "Please login again using `/login` to restart your userbot.\n\n"
-                        "🛑 This userbot will not restart automatically."
-                    )
-                    for owner in MY_OWNER_IDS:
-                        await MAIN_BOT_CLIENT.send_message(owner, 
-                            f"🔴 **Userbot Session Invalid**\n"
-                            f"👤 User: {chat_id}\n"
-                            f"📌 Reason: Device terminated or session expired\n"
-                            f"⏰ Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
-                        )
-                except:
-                    pass
-            try:
-                if chat_id in active_userbots:
-                    await active_userbots[chat_id].disconnect()
-                    del active_userbots[chat_id]
-            except:
-                pass
-            user_sessions.pop(chat_id, None)
-            await delete_session(chat_id)
-            break
-        except Exception as e:
-            error_msg = str(e)
             if "SESSION_INVALID" in error_msg or "invalid" in error_msg.lower():
                 if not session_invalid_notified:
                     session_invalid_notified = True
                     try:
                         await MAIN_BOT_CLIENT.send_message(chat_id, 
                             "⚠️ **Your userbot session has expired.**\n\n"
-                            "Please login again using `/login`.\n\n"
-                            "🛑 This userbot will not restart automatically."
-                        )
+                            "Please login again using `/login`.\n"
+                            "🛑 This userbot will not restart automatically.")
                         for owner in MY_OWNER_IDS:
                             await MAIN_BOT_CLIENT.send_message(owner, 
-                                f"🔴 **Userbot Session Invalid**\n"
-                                f"👤 User: {chat_id}\n"
-                                f"📌 Reason: {error_msg[:100]}\n"
-                                f"⏰ Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
-                            )
+                                f"🔴 **Userbot Session Invalid**\n👤 User: {chat_id}\n📌 Reason: {error_msg[:100]}")
                     except:
                         pass
                 try:
@@ -1058,7 +1024,10 @@ async def run_user_bot_with_restart(session_string, chat_id):
                     pass
                 user_sessions.pop(chat_id, None)
                 await delete_session(chat_id)
-                break
+                break  # stop restarting
+        except Exception as e:
+            # This catches PersistentTimestampOutdatedError and other recoverable errors
+            error_msg = str(e)
             now = time.time()
             if restart_count >= 5 and (now - last_restart_time) < 60:
                 print(f"⚠️ Too many restarts for user {chat_id} in short time. Waiting...")
@@ -1080,11 +1049,7 @@ async def run_user_bot_with_restart(session_string, chat_id):
                 try:
                     for owner in MY_OWNER_IDS:
                         await MAIN_BOT_CLIENT.send_message(owner, 
-                            f"🔄 **Userbot Restart**\n"
-                            f"👤 User: {chat_id}\n"
-                            f"📌 Reason: {error_msg[:80]}\n"
-                            f"🔢 Attempt: {restart_count}"
-                        )
+                            f"🔄 **Userbot Restart**\n👤 User: {chat_id}\n📌 Reason: {error_msg[:80]}\n🔢 Attempt: {restart_count}")
                 except:
                     pass
             await asyncio.sleep(5)
@@ -1094,19 +1059,12 @@ async def run_user_bot(session_string, chat_id):
     user_bot = None
     try:
         user_bot = TelegramClient(StringSession(session_string), API_ID, API_HASH, auto_reconnect=True)
-
-        try:
-            await user_bot.start()
-        except (UnauthorizedError, ValueError, RPCError) as e:
-            await MAIN_BOT_CLIENT.send_message(chat_id, f"⚠️ **Your userbot session has expired. Please login again using `/login`.**")
-            user_sessions.pop(chat_id, None)
-            await delete_session(chat_id)
-            raise Exception("SESSION_INVALID")
-
+        await user_bot.start()
         active_userbots[chat_id] = user_bot
 
         me = await user_bot.get_me()
         OWNER_IDS = {me.id}
+
 
         # ─── PER-USER DATA FOLDER ───
         USER_DATA_DIR = "user_data"
@@ -4302,7 +4260,7 @@ async def run_user_bot(session_string, chat_id):
 
         # ─── SPAM COMMANDS ────────────────────────────────────────────────────────
 
-               @register_cmd("spray")
+        @register_cmd("spray")
         async def cmd_spray(event, arg):
             if not arg: return
             count = None
@@ -6473,58 +6431,58 @@ async def run_user_bot(session_string, chat_id):
 
         # ─── DEATHGOD ────────────────────────────────────────────────────────────
 
-      @register_cmd("deathgod")
-async def cmd_deathgod(event, arg):
-    chat = event.chat_id
-    count = None
-    if arg and arg.strip().isdigit():
-        count = int(arg.strip())
-        if count < 1: count = 1
-        if count > 1000: count = 1000
+        @register_cmd("deathgod")
+        async def cmd_deathgod(event, arg):
+            chat = event.chat_id
+            count = None
+            if arg and arg.strip().isdigit():
+                count = int(arg.strip())
+                if count < 1: count = 1
+                if count > 1000: count = 1000
 
-    reply_to = None
-    target_user = None
+            reply_to = None
+            target_user = None
 
-    if event.is_reply:
-        reply = await event.get_reply_message()
-        if reply:
-            reply_to = reply.id
-            target_user = reply.sender_id
-            # 🛡️ PREMIUM PROTECTION CHECK
-            if target_user and await is_protected(target_user, "deathgod"):
-                await safe_edit(event, "🚫 This user is protected from Deathgod.")
+            if event.is_reply:
+                reply = await event.get_reply_message()
+                if reply:
+                    reply_to = reply.id
+                    target_user = reply.sender_id
+                    # 🛡️ PREMIUM PROTECTION CHECK
+                    if target_user and await is_protected(target_user, "deathgod"):
+                        await safe_edit(event, "🚫 This user is protected from Deathgod.")
+                        return
+
+            if chat in user_bot.spray_tasks and not user_bot.spray_tasks[chat].done():
                 return
 
-    if chat in user_bot.spray_tasks and not user_bot.spray_tasks[chat].done():
-        return
+            await safe_edit(event, f"☠️ Deathgod started{' with reply' if reply_to else ''}{' (' + str(count) + ' msgs)' if count else ' (infinite)'}...")
 
-    await safe_edit(event, f"☠️ Deathgod started{' with reply' if reply_to else ''}{' (' + str(count) + ' msgs)' if count else ' (infinite)'}...")
+            async def loop():
+                sent = 0
+                try:
+                    while chat in user_bot.spray_tasks:
+                        if count is not None and sent >= count:
+                            break
+                        # Optional: re-check every 10 messages (if premium added later)
+                        if target_user and sent % 10 == 0 and await is_protected(target_user, "deathgod"):
+                            await safe_send(chat, "🛑 Target is now protected. Stopping Deathgod.")
+                            break
+                        txt = random.choice(deathgod_replies)
+                        sent += 1
+                        await safe_send(chat, txt, reply_to=reply_to)
+                        if sent % 30 == 0:
+                            await asyncio.sleep(3)
+                        await asyncio.sleep(user_bot.SPRAY_DELAY)
+                except asyncio.CancelledError:
+                    pass
+                finally:
+                    user_bot.spray_tasks.pop(chat, None)
+                    if sent > 0:
+                        await safe_send(chat, f"☠️ Deathgod done: {sent} messages sent.")
 
-    async def loop():
-        sent = 0
-        try:
-            while chat in user_bot.spray_tasks:
-                if count is not None and sent >= count:
-                    break
-                # Optional: re-check every 10 messages (if premium added later)
-                if target_user and sent % 10 == 0 and await is_protected(target_user, "deathgod"):
-                    await safe_send(chat, "🛑 Target is now protected. Stopping Deathgod.")
-                    break
-                txt = random.choice(deathgod_replies)
-                sent += 1
-                await safe_send(chat, txt, reply_to=reply_to)
-                if sent % 30 == 0:
-                    await asyncio.sleep(3)
-                await asyncio.sleep(user_bot.SPRAY_DELAY)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            user_bot.spray_tasks.pop(chat, None)
-            if sent > 0:
-                await safe_send(chat, f"☠️ Deathgod done: {sent} messages sent.")
-
-    user_bot.spray_tasks[chat] = asyncio.create_task(loop())
-    await safe_edit(event, f"☠️ Deathgod started{' with reply' if reply_to else ''}{' (' + str(count) + ' msgs)' if count else ' (infinite)'}")
+            user_bot.spray_tasks[chat] = asyncio.create_task(loop())
+            await safe_edit(event, f"☠️ Deathgod started{' with reply' if reply_to else ''}{' (' + str(count) + ' msgs)' if count else ' (infinite)'}")
 
         # ─── DISPATCHER (modified to check premium) ──────────────────────────
         @user_bot.on(events.NewMessage)
@@ -7033,31 +6991,44 @@ async def cmd_deathgod(event, arg):
                     pass
 
         # ─── START USERBOT ──────────────────────────────────────────────────
-        await MAIN_BOT_CLIENT.send_message(chat_id, f"🔥 **Your Userbot is now Active!**\n👤 {me.first_name}\n💡 Use `.menu` to get started.")
+             await MAIN_BOT_CLIENT.send_message(chat_id, f"🔥 **Your Userbot is now Active!**\n👤 {me.first_name}\n💡 Use `.menu` to get started.")
         await user_bot.run_until_disconnected()
 
+    except (UnauthorizedError, ValueError, RPCError) as e:
+        # Session invalid – restart loop ko break karne ke liye re-raise
+        error_msg = str(e)
+        if "SESSION_INVALID" in error_msg or "invalid" in error_msg.lower():
+            try:
+                await MAIN_BOT_CLIENT.send_message(chat_id, "⚠️ **Your userbot session is invalid. Please login again with /login.**")
+            except:
+                pass
+        raise  # Re-raise so restart loop stops
+
     except asyncio.CancelledError:
-        print("Userbot task cancelled.")
-    except Exception as e:
-        if "SESSION_INVALID" not in str(e):
-            print(f"Userbot crashed: {e}")
-            try:
-                await MAIN_BOT_CLIENT.send_message(chat_id, f"⚠️ **Userbot crashed:** {str(e)[:100]}\nIt will restart automatically in 5 seconds...")
-            except:
-                pass
+        print(f"Userbot task cancelled for {chat_id}")
         raise
-    finally:
-        active_userbots.pop(chat_id, None)
-        if user_bot is not None:
-            try:
-                await user_bot.disconnect()
-            except:
-                pass
+
+    except Exception as e:
+        # Yeh catch karega: PersistentTimestampOutdatedError, aur baaki sab
+        print(f"Userbot crashed: {e}")
         try:
-            if user_bot is not None:
-                await MAIN_BOT_CLIENT.send_message(chat_id, "🛑 Userbot stopped.")
+            await MAIN_BOT_CLIENT.send_message(chat_id, f"⚠️ **Userbot crashed:** {str(e)[:100]}\nRestarting...")
         except:
             pass
+        raise  # Re-raise so restart loop handles it
+
+    finally:
+        # 🔥 IMPORTANT: Client ko properly cleanup karein
+        active_userbots.pop(chat_id, None)
+        if user_bot:
+            try:
+                # Pending tasks cancel karein
+                for task in asyncio.all_tasks():
+                    if task.get_name() == f"userbot_{chat_id}":
+                        task.cancel()
+                await user_bot.disconnect()
+            except Exception:
+                pass
 
 # ─── WEB SERVER ──────────────────────────────────────────────────────
 from flask import Flask
