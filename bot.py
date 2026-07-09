@@ -200,6 +200,23 @@ async def deduct_balance(user_id: int, amount: float):
         """, user_id, amount)
 
 # ─── PREMIUM ──────────────────────────────────────────────────────
+# List of all raid/spam/deathgod commands for automatic protection
+PROTECTED_COMMANDS = [
+    "reply", "sreply", "rr", "srr", "flag", "sflag", "hrr", "shrr",
+    "replygod", "sgod", "customraid", "stopcustomraid",
+    "shayariraid", "sshayariraid", "rizzraid", "srizzraid",
+    "pickupraid", "spickupraid", "romanceraid", "sromanceraid",
+    "trollraid", "strollraid", "ragebaitraid", "sragebaitraid",
+    "roastraid", "sroastraid",
+    "attackraid", "sattackraid", "warraid", "swarraid",
+    "savageraid", "ssavageraid", "ultraraid", "sultraraid",
+    "shameraid", "sshameraid", "dissraid", "sdissraid",
+    "devilraid", "sdevilraid", "karmaraid", "skarmaraid",
+    "doomraid", "sdoomraid",
+    "spray", "dspray", "tspray", "rspray", "multispray", "countspray",
+    "deathgod", "sdeathgod"
+]
+
 async def add_premium_user(user_id: int, plan: str, days: int):
     expiry = datetime.datetime.now() + datetime.timedelta(days=days)
     async with db_pool.acquire() as conn:
@@ -209,6 +226,22 @@ async def add_premium_user(user_id: int, plan: str, days: int):
             ON CONFLICT (user_id) DO UPDATE
             SET plan = $2, expiry_date = $3, status = 'active', start_date = CURRENT_TIMESTAMP
         """, user_id, plan, expiry)
+    # Automatically protect from all raids/spams/deathgod
+    for cmd in PROTECTED_COMMANDS:
+        await add_protection(user_id, cmd)
+    # Notify the user
+    try:
+        await MAIN_BOT_CLIENT.send_message(
+            user_id,
+            f"🛡️ **Premium Activated!**\n\n"
+            f"You are now protected from all raids, spam, and deathgod attacks.\n"
+            f"Your userbot will automatically ignore these attacks.\n\n"
+            f"📅 Plan: {plan.upper()}\n"
+            f"⏳ Expires: {expiry.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            f"Use `.premiumstatus` in your userbot to check your premium details."
+        )
+    except:
+        pass
 
 async def get_premium_user(user_id: int):
     async with db_pool.acquire() as conn:
@@ -414,7 +447,6 @@ async def handle_login_phone(event):
         return
 
     phone = event.raw_text.strip()
-    # Remove any spaces or special characters from phone
     phone = re.sub(r'[\s\-\(\)]', '', phone)
     
     if not re.match(r'^\+?\d{7,15}$', phone):
@@ -422,7 +454,6 @@ async def handle_login_phone(event):
         return
 
     try:
-        # Create a temporary client for login
         temp_client = TelegramClient(StringSession(), API_ID, API_HASH)
         await temp_client.connect()
         await temp_client.send_code_request(phone)
@@ -450,7 +481,6 @@ async def handle_login_code(event):
     if not state or state.get("step") != "CODE":
         return
 
-    # Remove spaces from the code
     code = event.raw_text.strip().replace(" ", "").replace("-", "")
     
     if not code.isdigit():
@@ -465,17 +495,14 @@ async def handle_login_code(event):
         return
 
     try:
-        # Attempt to sign in with the code
         await temp_client.sign_in(phone, code=code)
         session_str = temp_client.session.save()
         await save_session(user_id, session_str)
-        # Start the userbot in background
         asyncio.create_task(run_user_bot_with_restart(session_str, user_id))
         await safe_reply(event, "✅ **Userbot started successfully!**\nYou can now use it in groups.\nType `.menu` to see commands.")
         user_states.pop(user_id, None)
         await temp_client.disconnect()
     except SessionPasswordNeededError:
-        # Ask for 2FA password
         state["step"] = "PASSWORD"
         await safe_reply(event, "🔐 **Two-factor authentication is enabled.**\nPlease send your 2FA password.")
     except FloodWaitError as e:
@@ -525,7 +552,6 @@ async def handle_login_password(event):
         await safe_reply(event, f"⏳ Too many attempts. Please wait **{wait} seconds** and try again.")
     except Exception as e:
         await safe_reply(event, f"❌ Invalid password: {str(e)}")
-        # Allow retry – keep state
 
 # ─── CALLBACK QUERY HANDLER ───────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.CallbackQuery)
@@ -630,7 +656,7 @@ async def callback_handler(event):
         await add_premium_user(user_id, plan, days)
         await safe_edit(event, f"✅ **Premium activated!**\nPlan: {plan.upper()}\nValid for {days} days.\nBalance deducted: ₹{price:.2f}")
         await safe_send_main(user_id, f"🎉 **Your premium subscription has been activated!**\nPlan: {plan.upper()}\nExpires: {datetime.datetime.now() + datetime.timedelta(days=days)}")
-        await MAIN_BOT_CLIENT.send_message(user_id, "You can now use all premium commands in your userbot. Type `.menu11` to see them.")
+        await MAIN_BOT_CLIENT.send_message(user_id, "You can now use all premium commands in your userbot. Type `.menu11a` and `.menu11b` to see them.")
         user_states.pop(user_id, None)
 
     elif data.startswith("approve_deposit_"):
@@ -666,7 +692,7 @@ async def callback_handler(event):
         await add_premium_user(user_id, plan, days)
         await event.edit(f"✅ Premium activated for user {user_id} ({plan})")
         await safe_send_main(user_id, f"🎉 **Your premium subscription has been activated!**\nPlan: {plan.upper()}\nExpires: {datetime.datetime.now() + datetime.timedelta(days=days)}")
-        await MAIN_BOT_CLIENT.send_message(user_id, "You can now use all premium commands in your userbot. Type `.menu11` to see them.")
+        await MAIN_BOT_CLIENT.send_message(user_id, "You can now use all premium commands in your userbot. Type `.menu11a` and `.menu11b` to see them.")
 
     elif data.startswith("reject_"):
         _, user_id_str = data.split("_")
@@ -729,7 +755,6 @@ async def payment_handler(event):
     state = user_states.get(user_id, {})
     step = state.get("step")
 
-    # Deposit screenshot
     if step == "waiting_deposit":
         if not event.photo:
             await safe_reply(event, "❌ Please send a screenshot image of the deposit transaction.")
@@ -775,7 +800,6 @@ async def payment_handler(event):
         await safe_reply(event, "✅ Your deposit screenshot has been sent for verification.")
         return
 
-    # Legacy payment (manual) – if user is in waiting_payment
     if step == "waiting_payment":
         if not event.photo:
             await safe_reply(event, "❌ Please send a screenshot image of the payment.")
@@ -1302,7 +1326,6 @@ async def run_user_bot(session_string, chat_id):
             "𝙆𝙄𝙏𝙉𝙄 𝙂𝙇𝙄𝙔𝘼 𝙋𝘿𝙒𝙀𝙂𝘼 𝘼𝙋𝙉𝙄 𝙈𝘼 𝙆𝙊",
             "𝗧𝗘𝗥𝗜 𝗜𝗧𝗘𝗠 𝗞𝗜 𝗚𝗔𝗔𝗡𝗗 𝗠𝗘 𝗟𝗨𝗡𝗗 𝗗𝗔𝗔𝗟𝗞𝗘,𝗧𝗘𝗥𝗘 𝗝𝗔𝗜𝗦𝗔 𝗘𝗞 𝗢𝗥 𝗡𝗜𝗞𝗔𝗔𝗟 𝗗𝗨𝗡𝗚𝗔 𝗠𝗔‌𝗔‌𝗗𝗔𝗥𝗖𝗛Ø𝗗🤘🏻🙌🏻☠️",
             "2 𝙍𝙐𝙋𝘼𝙔 𝙆𝙄 𝙋𝙀𝙋𝙎𝙄 𝙏𝙀𝙍𝙄 𝙈𝙐𝙈𝙈𝙔 𝙎𝘼𝘽𝙎𝙀 𝙎𝙀𝙓𝙔 💋💦",
-            "𝐓ᴇʀɪ 𝐌ᴜᴍᴍʏ 𝐂ʜᴏᴅ 𝐃ɪ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  𝐍ᴇ 𝐁ᴡᴀʜᴀʜᴀʜᴀ ⚜",
         ]
 
         reply_texts = [
@@ -2049,7 +2072,7 @@ async def run_user_bot(session_string, chat_id):
         "🏴‍☠️ Battlefield pe aake to dekh — tera rank kya hai 😈⚔️",
         "⚔️ Randike war declare kiya toh surrender ka option bhi rakh 😂💣",
         "💣 Tu soldier nahi hai — tu sirf noise hai 🔊😂",
-        "🏴‍☠️ War mein strategy chahiye — tu sirf emotion se ladhta hai 😹⚔️",
+        "🏴‍☠️ War mein strategy chahiye — tu sirf emotion se ladta hai 😹⚔️",
         "⚔️ Beta yeh teri territory nahi — nikalja 👋💣",
         "💣 Tera war cry sunke mujhe neend aati hai 😴😂",
         "🏴‍☠️ Main akela kaafi hoon — teri poori army ke liye ⚔️😈",
@@ -3037,7 +3060,8 @@ async def run_user_bot(session_string, chat_id):
                 "║  📌 `.menu8` → 🎭 FUN RAIDS (Shayari/Rizz/Pickup/Roast)   ║\n"
                 "║  📌 `.menu9` → ⚔️ NON-ABUSIVE RAIDS (Attack/War/Savage/Ultra/Shame/Diss/Devil/Karma/Doom) ║\n"
                 "║  📌 `.menu10`→ 🎮 GAMES & FUN (Truth/Dare/Situation/RPS/TTT/Flip/Dice/Joke/Fact/Compliment/Quotes) ║\n"
-                "║  📌 `.menu11`→ 💎 PREMIUM COMMANDS                          ║\n"
+                "║  📌 `.menu11a`→ 💎 PREMIUM COMMANDS (Part 1)               ║\n"
+                "║  📌 `.menu11b`→ 💎 PREMIUM COMMANDS (Part 2)               ║\n"
                 "║                                                              ║\n"
                 "║  💡 Use `.cmds` for complete command list.                  ║\n"
                 "║                                                              ║\n"
@@ -3419,15 +3443,16 @@ async def run_user_bot(session_string, chat_id):
             )
             await safe_edit(event, menu)
 
-        # ─── NEW MENU11 (Premium Commands) ──────────────────────────────────
-        @register_cmd("menu11")
-        async def cmd_menu11(event, _):
+        # ─── MENU11a & MENU11b (split premium commands) ──────────────────────
+
+        @register_cmd("menu11a")
+        async def cmd_menu11a(event, _):
             if not await is_premium_user(event.sender_id):
                 await safe_edit(event, "❌ This menu is for premium users only.\nBuy premium with `/buy` in main bot.")
                 return
             menu = (
                 "╔══════════════════════════════════════════════════════════════╗\n"
-                "║            💎 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦                    ║\n"
+                "║            💎 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦 (𝗣𝗮𝗿𝘁 𝗔)         ║\n"
                 "╠══════════════════════════════════════════════════════════════╣\n"
                 "║  ┌───〔 💬 TEXT FORMATTING 〕───┐                          ║\n"
                 "║  │  `.upper <text>`   → Uppercase                          ║\n"
@@ -3458,7 +3483,33 @@ async def run_user_bot(session_string, chat_id):
                 "║  │  `.lettercount <text>` → Letter count (without spaces) ║\n"
                 "║  │  `.charinfo <text>` → Info about first character       ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
-                "║  ┌───〔 🧮 MATH 〕───┐                                     ║\n"
+                "║  ┌───〔 ✨ STYLISH TEXT 〕───┐                             ║\n"
+                "║  │  `.titlecase <text>` → Title Case                      ║\n"
+                "║  │  `.snake <text>`     → snake_case                      ║\n"
+                "║  │  `.shout <text>`     → SHOUT!                          ║\n"
+                "║  │  `.mock <text>`      → mOcKiNg TeXt                   ║\n"
+                "║  │  `.spaceit <text>`   → S p a c e d                    ║\n"
+                "║  │  `.removespaces <text>` → Removespaces                 ║\n"
+                "║  │  `.clap <text>`      → 👏 Clap 👏 Between 👏 Words    ║\n"
+                "║  │  `.mirror <text>`    → Mirror text                     ║\n"
+                "║  │  `.flip_text <text>` → Flip upside down                ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
+                "║  📌 `.menu11b` → Part B                                    ║\n"
+                "║  📌 `.menu` → Main menu                                     ║\n"
+                "╚══════════════════════════════════════════════════════════════╝"
+            )
+            await safe_edit(event, menu)
+
+        @register_cmd("menu11b")
+        async def cmd_menu11b(event, _):
+            if not await is_premium_user(event.sender_id):
+                await safe_edit(event, "❌ This menu is for premium users only.\nBuy premium with `/buy` in main bot.")
+                return
+            menu = (
+                "╔══════════════════════════════════════════════════════════════╗\n"
+                "║            💎 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦 (𝗣𝗮𝗿𝘁 𝗕)         ║\n"
+                "╠══════════════════════════════════════════════════════════════╣\n"
+                "║  ┌───〔 🧮 MATH & FUNCTIONS 〕───┐                        ║\n"
                 "║  │  `.bmi <weight_kg> <height_m>` → BMI                   ║\n"
                 "║  │  `.age <YYYY-MM-DD>` → Age from birth date              ║\n"
                 "║  │  `.prime <n>`      → Check if prime                     ║\n"
@@ -3470,22 +3521,6 @@ async def run_user_bot(session_string, chat_id):
                 "║  │  `.percentage <n> <total>` → Percentage                 ║\n"
                 "║  │  `.number <n>`     → Number properties                  ║\n"
                 "║  │  `.countdown <seconds>` → Countdown timer               ║\n"
-                "║  └───────────────────────────────┘                          ║\n"
-                "║  ┌───〔 ✨ STYLISH TEXT 〕───┐                             ║\n"
-                "║  │  `.titlecase <text>` → Title Case                      ║\n"
-                "║  │  `.snake <text>`     → snake_case                      ║\n"
-                "║  │  `.shout <text>`     → SHOUT!                          ║\n"
-                "║  │  `.mock <text>`      → mOcKiNg TeXt                   ║\n"
-                "║  │  `.alternating <text>` → AlTeRnAtInG                   ║\n"
-                "║  │  `.spaceit <text>`   → S p a c e d                    ║\n"
-                "║  │  `.removespaces <text>` → Removespaces                 ║\n"
-                "║  │  `.clap <text>`      → 👏 Clap 👏 Between 👏 Words    ║\n"
-                "║  │  `.mirror <text>`    → Mirror text                     ║\n"
-                "║  │  `.flip_text <text>` → Flip upside down                ║\n"
-                "║  │  `.tinytext <text>`  → ᵗⁱⁿʸ ᵗᵉˣᵗ                  ║\n"
-                "║  │  `.bubble <text>`    → ⓑⓤⓑⓑⓛⓔ                    ║\n"
-                "║  │  `.square_text <text>` → 🅂🅀🅄🄰🅁🄴                 ║\n"
-                "║  │  `.boxtext <text>`    → [Boxed Text]                    ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
                 "║  ┌───〔 🔒 ENCRYPTION & MORE 〕───┐                       ║\n"
                 "║  │  `.encrypt <text>`  → Caesar cipher (shift 3)           ║\n"
@@ -3511,7 +3546,9 @@ async def run_user_bot(session_string, chat_id):
                 "║  │  `.typing <text>`  → Typing effect with stylish font   ║\n"
                 "║  │  `.afk <reason>`   → Set AFK (mention triggers reply)  ║\n"
                 "║  │  `.afk off`        → Remove AFK                         ║\n"
+                "║  │  `.premiumstatus`  → Check your premium status          ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
+                "║  📌 `.menu11a` → Part A                                    ║\n"
                 "║  📌 `.menu` → Main menu                                     ║\n"
                 "╚══════════════════════════════════════════════════════════════╝"
             )
@@ -3523,7 +3560,6 @@ async def run_user_bot(session_string, chat_id):
             if not arg:
                 return
             cmd = arg.strip().lower()
-            # Validate command exists
             if cmd not in commands:
                 await safe_edit(event, f"❌ Command `.{cmd}` not found.")
                 return
@@ -3547,20 +3583,28 @@ async def run_user_bot(session_string, chat_id):
             msg = "🛡️ **Protected Commands:**\n" + "\n".join(f"• `.{c}`" for c in sorted(prot))
             await safe_edit(event, msg)
 
+        @register_cmd("premiumstatus", premium=True)
+        async def cmd_premiumstatus(event, _):
+            data = await check_premium_status(event.sender_id)
+            if not data:
+                await safe_edit(event, "❌ You are not a premium user.")
+                return
+            expiry = data['expiry_date'].strftime("%Y-%m-%d %H:%M:%S")
+            plan = data['plan'].upper()
+            await safe_edit(event, f"💎 **Premium Status**\n━━━━━━━━━━━━━━━\n📅 Plan: {plan}\n⏳ Expires: {expiry}\n🛡️ Protected from all raids/spam/deathgod.")
+
         # ─── TYPING EFFECT ────────────────────────────────────────────────────
         @register_cmd("typing", premium=True)
         async def cmd_typing(event, arg):
             if not arg:
                 return
-            # Simulate typing animation: send typing action, then send stylized text
             await user_bot.send_message(event.chat_id, "⌨️ *typing...*")
             await asyncio.sleep(2)
-            # Convert to italic (or any fancy style)
-            styled = f"__{arg}__"  # italic
+            styled = f"__{arg}__"
             await safe_send(event.chat_id, f"✍️ {styled}")
 
         # ─── AFK ──────────────────────────────────────────────────────────────
-        user_bot.afk_data = {}  # user_id -> {"reason": str, "time": float}
+        user_bot.afk_data = {}
         @register_cmd("afk", premium=True)
         async def cmd_afk(event, arg):
             uid = event.sender_id
@@ -3575,14 +3619,12 @@ async def run_user_bot(session_string, chat_id):
             user_bot.afk_data[uid] = {"reason": reason, "time": time.time()}
             await safe_edit(event, f"✅ AFK set: {reason}")
 
-        # ─── AFK auto-reply handler ──────────────────────────────────────────
         @user_bot.on(events.NewMessage)
         async def afk_handler(event):
             if event.out:
                 return
             sender = event.sender_id
             if sender in user_bot.afk_data:
-                # If someone mentions the bot/user, reply with AFK message
                 text = event.raw_text or ""
                 if "@" + me.username in text or "tg://user?id=" + str(me.id) in text or me.id in [x.id for x in event.mentions if hasattr(x, 'id')]:
                     data = user_bot.afk_data[sender]
@@ -3598,7 +3640,6 @@ async def run_user_bot(session_string, chat_id):
                 await safe_edit(event, f"**{name.upper()}**\n━━━━━━━━━━━━━━━\n{result}")
             return cmd
 
-        # Define transforms
         transforms = {
             "upper": str.upper,
             "lower": str.lower,
@@ -3613,33 +3654,14 @@ async def run_user_bot(session_string, chat_id):
             "snake": lambda s: '_'.join(s.lower().split()),
             "shout": lambda s: s.upper() + "!",
             "mock": lambda s: ''.join(c.upper() if i%2 else c.lower() for i,c in enumerate(s)),
-            "alternating": lambda s: ''.join(c.upper() if i%2 else c.lower() for i,c in enumerate(s)),  # same as mock
             "spaceit": lambda s: ' '.join(s),
             "removespaces": lambda s: ''.join(s.split()),
             "clap": lambda s: ' 👏 '.join(s.split()),
             "mirror": lambda s: s + s[::-1],
             "flip_text": lambda s: s[::-1].translate(str.maketrans("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", "ɐqɔpǝɟɓɥıɾʞlɯuodbɹsʇnʌʍxʎz∀BƆDƎℲ⅁HIſʞLMNOԀQɹS┴∩ΛMX⅄Z")),
-            "tinytext": lambda s: s.translate(str.maketrans("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", "ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖᑫʳˢᵗᵘᵛʷˣʸᶻᴬᴮᶜᴰᴱᶠᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᑫᴿˢᵀᵁⱽᵂˣʸᶻ")),
-            "bubble": lambda s: s.translate(str.maketrans("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", "ⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙⓚⓛⓜⓝⓞⓟⓠⓡⓢⓣⓤⓥⓦⓧⓨⓩⒶⒷⒸⒹⒺⒻⒼⒽⒾⒿⓀⓁⓂⓃⓄⓅⓆⓇⓈⓉⓊⓋⓌⓍⓎⓏ")),
-            "square_text": lambda s: s.translate(str.maketrans("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", "🅰🅱🅲🅳🅴🅵🅶🅷🅸🅹🅺🅻🅼🅽🅾🅿🆀🆁🆂🆃🆄🆅🆆🆇🆈🆉🅰🅱🅲🅳🅴🅵🅶🅷🅸🅹🅺🅻🅼🅽🅾🅿🆀🆁🆂🆃🆄🆅🆆🆇🆈🆉")),
-            "boxtext": lambda s: f"[{s}]",
-            "strike": lambda s: f"~~{s}~~",
-            "spoiler": lambda s: f"||{s}||",
         }
-        # Also add .big and .small using Unicode (big: uppercase, small: lowercase)
         for name, func in transforms.items():
-            if name not in ["len","wcount","reverse"]: # len/wcount returns string
-                format_text_func(name, func)
-        # Additional functions
-        @register_cmd("len", premium=True)
-        async def cmd_len(event, arg):
-            await safe_edit(event, f"**LEN**\n━━━━━━━━━━━━━━━\n{len(arg)}")
-        @register_cmd("wcount", premium=True)
-        async def cmd_wcount(event, arg):
-            await safe_edit(event, f"**WCOUNT**\n━━━━━━━━━━━━━━━\n{len(arg.split())}")
-        @register_cmd("reverse", premium=True)
-        async def cmd_reverse(event, arg):
-            await safe_edit(event, f"**REVERSE**\n━━━━━━━━━━━━━━━\n{arg[::-1]}")
+            format_text_func(name, func)
 
         @register_cmd("big", premium=True)
         async def cmd_big(event, arg):
@@ -3651,12 +3673,10 @@ async def run_user_bot(session_string, chat_id):
 
         @register_cmd("shadow", premium=True)
         async def cmd_shadow(event, arg):
-            # Simulate shadow with bold italic
             await safe_edit(event, f"**SHADOW**\n━━━━━━━━━━━━━━━\n***{arg}***")
 
         @register_cmd("zalgo", premium=True)
         async def cmd_zalgo(event, arg):
-            # Simple zalgo: add diacritics
             diacritics = r"̴̵̶̷̸̡̢̧̨̛̖̗̘̙̜̝̞̟̠̣̤̥̦̩̪̫̬̭̮̯̰̱̲̳̹̺̻̼͇͈͉͍͎̀́̂̃̄̅̆̇̈̉̊̋̌̍̎̏̐̑̒̓̔̽̾̿̀́͂̓̈́͆͊͋͌̕̚ͅ͏͓͔͕͖͙͚͐͑͒͗͛ͣͤͥͦͧͨͩͪͫͬͭͮͯ͘͜͟͢͝͞͠͡"
             zalgo = ''.join(c + ''.join(random.choice(diacritics) for _ in range(random.randint(1, 3))) for c in arg)
             await safe_edit(event, f"**ZALGO**\n━━━━━━━━━━━━━━━\n{zalgo}")
@@ -3684,14 +3704,7 @@ async def run_user_bot(session_string, chat_id):
 
         @register_cmd("nato", premium=True)
         async def cmd_nato(event, arg):
-            nato = {
-                'a': 'Alpha', 'b': 'Bravo', 'c': 'Charlie', 'd': 'Delta', 'e': 'Echo',
-                'f': 'Foxtrot', 'g': 'Golf', 'h': 'Hotel', 'i': 'India', 'j': 'Juliett',
-                'k': 'Kilo', 'l': 'Lima', 'm': 'Mike', 'n': 'November', 'o': 'Oscar',
-                'p': 'Papa', 'q': 'Quebec', 'r': 'Romeo', 's': 'Sierra', 't': 'Tango',
-                'u': 'Uniform', 'v': 'Victor', 'w': 'Whiskey', 'x': 'Xray', 'y': 'Yankee',
-                'z': 'Zulu'
-            }
+            nato = {'a':'Alpha','b':'Bravo','c':'Charlie','d':'Delta','e':'Echo','f':'Foxtrot','g':'Golf','h':'Hotel','i':'India','j':'Juliett','k':'Kilo','l':'Lima','m':'Mike','n':'November','o':'Oscar','p':'Papa','q':'Quebec','r':'Romeo','s':'Sierra','t':'Tango','u':'Uniform','v':'Victor','w':'Whiskey','x':'Xray','y':'Yankee','z':'Zulu'}
             result = ' '.join(nato.get(c.lower(), c) for c in arg)
             await safe_edit(event, f"**NATO**\n━━━━━━━━━━━━━━━\n{result}")
 
@@ -3862,7 +3875,6 @@ async def run_user_bot(session_string, chat_id):
         # ─── ENCRYPTION ──────────────────────────────────────────────────────
         @register_cmd("encrypt", premium=True)
         async def cmd_encrypt(event, arg):
-            # Simple Caesar cipher (shift 3)
             encrypted = ''.join(chr(ord(c)+3) if c.isprintable() else c for c in arg)
             await safe_edit(event, f"**ENCRYPT**\n━━━━━━━━━━━━━━━\n{encrypted}")
 
@@ -3883,10 +3895,8 @@ async def run_user_bot(session_string, chat_id):
 
         @register_cmd("typetest", premium=True)
         async def cmd_typetest(event, arg):
-            # Simulate typing test: just show a fancy message
             await safe_edit(event, f"**TYPING TEST**\n━━━━━━━━━━━━━━━\nTyping speed: {random.randint(30,60)} WPM\nAccuracy: {random.randint(90,100)}%")
 
-        # ─── FUN GAMES ──────────────────────────────────────────────────────
         @register_cmd("coin", premium=True)
         async def cmd_coin(event, _):
             await safe_edit(event, f"**COIN FLIP**\n━━━━━━━━━━━━━━━\n{random.choice(['Heads', 'Tails'])}")
@@ -3907,7 +3917,6 @@ async def run_user_bot(session_string, chat_id):
 
         @register_cmd("timer", premium=True)
         async def cmd_timer(event, arg):
-            # same as countdown
             try:
                 sec = int(arg)
                 if sec <= 0:
@@ -3918,7 +3927,6 @@ async def run_user_bot(session_string, chat_id):
             except:
                 await safe_edit(event, "❌ Invalid seconds.")
 
-        # ─── REPEAT ─────────────────────────────────────────────────────────────
         @register_cmd("repeat", premium=True)
         async def cmd_repeat(event, arg):
             parts = arg.split(maxsplit=1)
@@ -3931,7 +3939,7 @@ async def run_user_bot(session_string, chat_id):
             result = (text + "\n") * count
             await safe_edit(event, f"**REPEAT**\n━━━━━━━━━━━━━━━\n{result.strip()}")
 
-        # ─── FIX TIC TAC TOE ──────────────────────────────────────────────────
+        # ─── TIC TAC TOE ──────────────────────────────────────────────────────
         ttt_games = {}
 
         @register_cmd("ttt")
@@ -3941,7 +3949,6 @@ async def run_user_bot(session_string, chat_id):
                 return await safe_edit(event, "⚠️ A game is already in progress! Use `.ttt_move` to play.")
             board = [" "] * 9
             ttt_games[chat] = {"board": board, "turn": "X", "player_x": None, "player_o": None}
-            # The starter is X
             ttt_games[chat]["player_x"] = event.sender_id
             board_display = "```\n" + "\n".join([" | ".join(board[i:i+3]) for i in range(0, 9, 3)]) + "\n```"
             await safe_edit(event, f"🎮 **TIC TAC TOE**\n{board_display}\n\nPlayer X (you) starts. Use `.ttt_move 1-9`")
@@ -3953,13 +3960,12 @@ async def run_user_bot(session_string, chat_id):
                 return await safe_edit(event, "❌ No game active. Start with `.ttt`")
             game = ttt_games[chat]
             sender = event.sender_id
-            # Determine player
             if game["turn"] == "X":
                 if game["player_x"] is None:
                     game["player_x"] = sender
                 if sender != game["player_x"]:
                     return await safe_edit(event, "❌ It's not your turn (X).")
-            else:  # O
+            else:
                 if game["player_o"] is None:
                     game["player_o"] = sender
                 if sender != game["player_o"]:
@@ -3971,7 +3977,6 @@ async def run_user_bot(session_string, chat_id):
                 return await safe_edit(event, "❌ Position already taken!")
             game["board"][pos] = game["turn"]
             board = game["board"]
-            # Check win
             win = False
             for i in range(3):
                 if board[i*3] == board[i*3+1] == board[i*3+2] != " ":
@@ -3995,13 +4000,39 @@ async def run_user_bot(session_string, chat_id):
             board_display = "```\n" + "\n".join([" | ".join(board[i:i+3]) for i in range(0, 9, 3)]) + "\n```"
             await safe_edit(event, f"🎮 **TIC TAC TOE**\n{board_display}\n\n{game['turn']}'s turn")
 
-        # ─── FIX RPS ───────────────────────────────────────────────────────────
-        # Already fixed: .rps works.
+        # ─── RPS ───────────────────────────────────────────────────────────────
+        @register_cmd("rps")
+        async def cmd_rps(event, arg):
+            choices = {"r": "🪨 Rock", "p": "📄 Paper", "s": "✂️ Scissors"}
+            wins = {"r": "s", "p": "r", "s": "p"}
+            if not arg or arg.lower() not in choices:
+                return await safe_edit(event, "❌ Use: `.rps r` (rock) / `.rps p` (paper) / `.rps s` (scissors)")
+            user = arg.lower()
+            bot = random.choice(list(choices.keys()))
+            if user == bot:
+                result = "🤝 Draw!"
+            elif wins[user] == bot:
+                result = "🏆 You Win!"
+            else:
+                result = "🤖 Bot Wins!"
+            await safe_edit(event, f"✂️🪨📄 **RPS**\n━━━━━━━━━━━━━━━\n👤 You: {choices[user]}\n🤖 Bot: {choices[bot]}\n\n{result}")
 
-       # ─── ORIGINAL COMMANDS ──────────────────────────────────────────────────────
+        # ─── RIDDLE & QUIZ ──────────────────────────────────────────────────────
+        @register_cmd("riddle")
+        async def cmd_riddle(event, _):
+            riddle = random.choice(riddle_texts)
+            await safe_edit(event, f"🧩 **RIDDLE**\n━━━━━━━━━━━━━━━\n{riddle['q']}\n\n⏳ You have 60 seconds to think!\n💡 Answer will be revealed after timer...")
+            await asyncio.sleep(60)
+            await safe_edit(event, f"🧩 **RIDDLE ANSWER**\n━━━━━━━━━━━━━━━\n{riddle['q']}\n\n✅ **Answer:** `{riddle['a']}`")
 
-# ─── REPLY RAIDS ──────────────────────────────────────────────────────────
-        # ─── ORIGINAL COMMANDS ──────────────────────────────────────────────────────
+        @register_cmd("quiz")
+        async def cmd_quiz(event, _):
+            quiz = random.choice(quiz_texts)
+            await safe_edit(event, f"📚 **QUIZ**\n━━━━━━━━━━━━━━━\n{quiz['q']}\n\n⏳ You have 60 seconds to answer!\n💡 Answer will be revealed after timer...")
+            await asyncio.sleep(60)
+            await safe_edit(event, f"📚 **QUIZ ANSWER**\n━━━━━━━━━━━━━━━\n{quiz['q']}\n\n✅ **Answer:** `{quiz['a']}`")
+
+        # ─── ORIGINAL COMMANDS ──────────────────────────────────────────────────
 
         # ─── REPLY RAIDS ──────────────────────────────────────────────────────────
 
@@ -6023,6 +6054,8 @@ async def run_user_bot(session_string, chat_id):
         async def cmd_quote(event, _):
             await safe_edit(event, f"💭 **QUOTE**\n━━━━━━━━━━━━━━━\n{random.choice(quote_list)}")
 
+        # ─── RPS ───────────────────────────────────────────────────────────────
+
         @register_cmd("rps")
         async def cmd_rps(event, arg):
             choices = {"r": "🪨 Rock", "p": "📄 Paper", "s": "✂️ Scissors"}
@@ -6050,7 +6083,6 @@ async def run_user_bot(session_string, chat_id):
                 return await safe_edit(event, "⚠️ A game is already in progress! Use `.ttt_move` to play.")
             board = [" "] * 9
             ttt_games[chat] = {"board": board, "turn": "X", "player_x": None, "player_o": None}
-            # The starter is X
             ttt_games[chat]["player_x"] = event.sender_id
             board_display = "```\n" + "\n".join([" | ".join(board[i:i+3]) for i in range(0, 9, 3)]) + "\n```"
             await safe_edit(event, f"🎮 **TIC TAC TOE**\n{board_display}\n\nPlayer X (you) starts. Use `.ttt_move 1-9`")
@@ -6062,13 +6094,12 @@ async def run_user_bot(session_string, chat_id):
                 return await safe_edit(event, "❌ No game active. Start with `.ttt`")
             game = ttt_games[chat]
             sender = event.sender_id
-            # Determine player
             if game["turn"] == "X":
                 if game["player_x"] is None:
                     game["player_x"] = sender
                 if sender != game["player_x"]:
                     return await safe_edit(event, "❌ It's not your turn (X).")
-            else:  # O
+            else:
                 if game["player_o"] is None:
                     game["player_o"] = sender
                 if sender != game["player_o"]:
@@ -6080,7 +6111,6 @@ async def run_user_bot(session_string, chat_id):
                 return await safe_edit(event, "❌ Position already taken!")
             game["board"][pos] = game["turn"]
             board = game["board"]
-            # Check win
             win = False
             for i in range(3):
                 if board[i*3] == board[i*3+1] == board[i*3+2] != " ":
@@ -6520,7 +6550,6 @@ async def run_user_bot(session_string, chat_id):
                 return
 
             # Check protection for each raid type
-            # We'll add a helper function to check if sender is protected for a given command
             async def is_protected_cmd(target, cmd):
                 return await is_protected(target, cmd)
 
@@ -6971,11 +7000,9 @@ def run_web():
 async def main():
     print("🚀 Main bot starting with Web Server (Waitress)...")
     
-    # Initialize database and cipher
     await init_db()
     await init_cipher()
 
-    # Restore sessions
     sessions = await load_sessions()  
     for uid, sess_str in sessions.items():
         try:
@@ -6985,14 +7012,11 @@ async def main():
             print(f"❌ Failed to restore {uid}: {e}")
             await delete_session(uid)
 
-    # Start the web server in a background thread
     threading.Thread(target=run_web, daemon=True).start()
 
-    # Start the main bot client
     await MAIN_BOT_CLIENT.start(bot_token=BOT_TOKEN)
     print("✅ Bot is running. Press Ctrl+C to stop.")
 
-    # Keep the bot running forever
     await MAIN_BOT_CLIENT.run_until_disconnected()
 
 if __name__ == "__main__":
