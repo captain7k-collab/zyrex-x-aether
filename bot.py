@@ -77,8 +77,7 @@ async def init_db():
                 session_encrypted TEXT NOT NULL,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)   # <-- closing triple quote HERE
-
+        """)
         # ─── app_config table ───
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS app_config (
@@ -86,7 +85,6 @@ async def init_db():
                 key_value TEXT NOT NULL
             )
         """)
-
         # ─── premium_users table ───
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS premium_users (
@@ -97,13 +95,20 @@ async def init_db():
                 status TEXT DEFAULT 'active'
             )
         """)
-
         # ─── premium_protections table ───
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS premium_protections (
                 user_id BIGINT,
                 command_name TEXT,
                 PRIMARY KEY (user_id, command_name)
+            )
+        """)
+        # ─── user_wallet table ───
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_wallet (
+                user_id BIGINT PRIMARY KEY,
+                balance DECIMAL(10,2) DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -161,6 +166,28 @@ async def delete_session(user_id: int):
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM user_sessions WHERE user_id = $1", user_id)
 
+# ─── WALLET FUNCTIONS ─────────────────────────────────────────────
+async def get_balance(user_id: int) -> float:
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT balance FROM user_wallet WHERE user_id = $1", user_id)
+        return float(row['balance']) if row else 0.0
+
+async def add_balance(user_id: int, amount: float):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO user_wallet (user_id, balance) VALUES ($1, $2)
+            ON CONFLICT (user_id) DO UPDATE SET balance = user_wallet.balance + $2, updated_at = CURRENT_TIMESTAMP
+        """, user_id, amount)
+
+async def deduct_balance(user_id: int, amount: float):
+    bal = await get_balance(user_id)
+    if bal < amount:
+        raise ValueError("Insufficient balance")
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE user_wallet SET balance = balance - $2, updated_at = CURRENT_TIMESTAMP WHERE user_id = $1
+        """, user_id, amount)
+
 # ─── PREMIUM MANAGEMENT ─────────────────────────────────────────────
 async def add_premium_user(user_id: int, plan: str, days: int):
     expiry = datetime.datetime.now() + datetime.timedelta(days=days)
@@ -187,7 +214,6 @@ async def check_premium_status(user_id: int):
         return None
     expiry = data['expiry_date']
     if expiry < datetime.datetime.now():
-        # expired
         async with db_pool.acquire() as conn:
             await conn.execute("UPDATE premium_users SET status = 'expired' WHERE user_id = $1", user_id)
         return None
@@ -216,7 +242,6 @@ async def get_protections(user_id: int) -> Set[str]:
     return {row['command_name'] for row in rows}
 
 async def is_protected(target_user: int, command: str) -> bool:
-    # check if target has premium and protection for this command
     prem = await check_premium_status(target_user)
     if not prem:
         return False
@@ -228,14 +253,15 @@ MAIN_BOT_CLIENT = TelegramClient("main_bot_session", API_ID, API_HASH)
 
 active_userbots = {}
 user_sessions = {}
+user_states = {}  # for login and payment flow
 
 print("🚀 Main Bot started with Admin Logger Engine...")
-print("DEBUG: MAIN_BOT_CLIENT type =", type(MAIN_BOT_CLIENT))   # ✅ This is correct
+print("DEBUG: MAIN_BOT_CLIENT type =", type(MAIN_BOT_CLIENT))
 
 async def is_user_in_channel(user_id, channel_data):
     try:
-        channel = await MAIN_BOT_CLIENT.get_entity(channel_data["id"])   # 8 spaces
-        await MAIN_BOT_CLIENT.get_permissions(channel, user_id)          # 8 spaces – same as above
+        channel = await MAIN_BOT_CLIENT.get_entity(channel_data["id"])
+        await MAIN_BOT_CLIENT.get_permissions(channel, user_id)
         return True
     except Exception:
         return False
@@ -312,6 +338,12 @@ async def safe_send_main(chat, text, **kwargs):
     except Exception:
         return None
 
+def plan_price(plan):
+    return {"monthly": 45, "quarterly": 120, "yearly": 490}[plan]
+
+def plan_price_str(plan):
+    return f"₹{plan_price(plan)}"
+
 # ─── MAIN BOT HANDLERS ─────────────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/start"))
 async def start_handler(event):
@@ -321,17 +353,20 @@ async def start_handler(event):
     save_users(broadcast_users)
     buttons = [
         [types.KeyboardButtonCallback("💎 Buy Premium", data="buy_menu")],
+        [types.KeyboardButtonCallback("💰 Deposit / Check Balance", data="deposit")],
         [types.KeyboardButtonUrl("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)],
     ]
+    bal = await get_balance(user_id)
     await safe_reply(
         event,
-        "╔═══════════════════════════════════════════╗\n"
-        "║  ✦ 👑 ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️ 𝐀𝐔𝐓𝐎-𝐃𝐄𝐏𝐋𝐎𝐘 👑 ✦  ║\n"
-        "╚═══════════════════════════════════════════╝\n\n"
-        "Welcome to the **Ultimate Userbot Manager**.\n"
-        "• To start your personal userbot, type `/login`\n"
-        "• To stop it, use `/logout`\n"
-        "• Use the buttons below to buy premium or view features.\n\n"
+        f"╔═══════════════════════════════════════════╗\n"
+        f"║  ✦ 👑 ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️ 𝐀𝐔𝐓𝐎-𝐃𝐄𝐏𝐋𝐎𝐘 👑 ✦  ║\n"
+        f"╚═══════════════════════════════════════════╝\n\n"
+        f"Welcome to the **Ultimate Userbot Manager**.\n"
+        f"• To start your personal userbot, type `/login`\n"
+        f"• To stop it, use `/logout`\n"
+        f"• Use the buttons below to buy premium or deposit.\n\n"
+        f"💰 **Your Wallet Balance:** ₹{bal:.2f}\n\n"
         "Enjoy the premium experience! 🚀",
         buttons=buttons
     )
@@ -395,12 +430,38 @@ async def callback_handler(event):
                 "Example: `+919876543210`"
             )
             await event.answer("Verified! Now send your number.")
-    
-    elif data == "buy_menu":
-        # User clicked "Buy Premium" from /start
+
+    elif data == "deposit":
         user_id = event.sender_id
         if event.chat_id != user_id:
-            await event.answer("Please use this command in private chat.", alert=True)
+            await event.answer("Please use this in private chat.", alert=True)
+            return
+        # Show deposit instructions and QR
+        caption = (
+            "💰 **Deposit Funds**\n\n"
+            "1. Scan the QR below or use UPI: `{UPI_ID}`\n"
+            "2. Send any amount you want to deposit.\n"
+            "3. **After payment, send a screenshot of the transaction** with the **amount paid** in the caption.\n"
+            "4. Example caption: `I paid ₹100`\n"
+            "5. Our team will verify and credit your wallet."
+        ).format(UPI_ID=UPI_ID)
+        buttons = [[types.KeyboardButtonUrl("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)]]
+        try:
+            await event.delete()
+        except:
+            pass
+        try:
+            await event.respond(caption, file=QR_IMAGE_PATH, buttons=buttons)
+        except Exception as e:
+            await event.respond(caption + "\n\n⚠️ QR image not found. Please contact owner.", buttons=buttons)
+            print(f"Deposit QR send error: {e}")
+        user_states[user_id] = {"step": "waiting_deposit"}
+        await event.answer("Deposit instructions sent.")
+
+    elif data == "buy_menu":
+        user_id = event.sender_id
+        if event.chat_id != user_id:
+            await event.answer("Please use this in private chat.", alert=True)
             return
         prem = await check_premium_status(user_id)
         if prem:
@@ -415,51 +476,72 @@ async def callback_handler(event):
         await safe_edit(event, "💰 **Select your premium plan:**", buttons=buttons)
 
     elif data.startswith("buy_"):
-        plan = data.split("_")[1]  # monthly, quarterly, yearly
+        plan = data.split("_")[1]
         user_id = event.sender_id
         if user_id not in user_states:
             user_states[user_id] = {}
-        user_states[user_id]["step"] = "waiting_payment"
-        user_states[user_id]["plan"] = plan
-
-        # ─── Premium Features Button (hardcoded link) ───
-        buttons = [[types.KeyboardButtonUrl("🔗 Premium Features", url="https://t.me/userbotsupport_ZA/20")]]
-
-        # ─── Payment Instructions ───
-        caption = (
-            f"✅ You selected **{plan.upper()}** plan.\n\n"
-            "💳 **Payment Instructions:**\n"
-            f"1. Scan the QR code below or use UPI: `{UPI_ID}`\n"
-            f"2. Send **{plan_price(plan)}** to the UPI ID.\n"
-            "3. Take a screenshot of the transaction (with UTR number).\n"
-            "4. Send the screenshot here in this chat.\n"
-            "5. Once our team approves, your premium will be activated."
-        )
-
-        # Delete the plan selection message
-        try:
-            await event.delete()
-        except:
-            pass
-
-        # ─── Send QR Image (from local file or GitHub URL) ───
-        try:
-            await event.respond(caption, file=QR_IMAGE_PATH, buttons=buttons)
-        except Exception as e:
-            # Fallback if image not found
-            await event.respond(
-                caption + "\n\n⚠️ QR image not found. Please contact owner.",
-                buttons=buttons
+        # Check wallet balance
+        price = plan_price(plan)
+        bal = await get_balance(user_id)
+        if bal < price:
+            # Insufficient balance
+            msg = (
+                f"❌ **Insufficient Balance!**\n\n"
+                f"Your wallet balance: ₹{bal:.2f}\n"
+                f"Plan price: ₹{price}\n"
+                f"Need additional: ₹{price - bal:.2f}\n\n"
+                f"Please deposit more funds using the **Deposit** button."
             )
-            print(f"QR send error: {e}")
+            buttons = [[types.KeyboardButtonCallback("💰 Deposit Now", data="deposit")]]
+            await safe_edit(event, msg, buttons=buttons)
+            return
+        # Sufficient balance: deduct and activate premium
+        try:
+            await deduct_balance(user_id, price)
+        except ValueError as e:
+            await safe_edit(event, f"❌ {e}")
+            return
+        days = {"monthly":30, "quarterly":90, "yearly":365}[plan]
+        await add_premium_user(user_id, plan, days)
+        await safe_edit(event, f"✅ **Premium activated!**\nPlan: {plan.upper()}\nValid for {days} days.\nBalance deducted: ₹{price:.2f}")
+        await safe_send_main(user_id, f"🎉 **Your premium subscription has been activated!**\nPlan: {plan.upper()}\nExpires: {datetime.datetime.now() + datetime.timedelta(days=days)}")
+        await MAIN_BOT_CLIENT.send_message(user_id, "You can now use all premium commands in your userbot. Type `.menu11` to see them.")
+        # Clear state
+        user_states.pop(user_id, None)
+
+    elif data.startswith("approve_deposit_"):
+        # format: approve_deposit_userid_amount
+        parts = data.split("_")
+        if len(parts) != 4:
+            return
+        _, _, user_id_str, amount_str = parts
+        user_id = int(user_id_str)
+        amount = float(amount_str)
+        owner_id = event.sender_id
+        if owner_id not in MY_OWNER_IDS:
+            await event.answer("❌ Not authorized.", alert=True)
+            return
+        await add_balance(user_id, amount)
+        await event.edit(f"✅ Deposit of ₹{amount:.2f} approved for user {user_id}")
+        await safe_send_main(user_id, f"✅ Your deposit of ₹{amount:.2f} has been credited to your wallet.\nNew balance: ₹{await get_balance(user_id):.2f}")
+
+    elif data.startswith("reject_deposit_"):
+        _, _, user_id_str = data.split("_")
+        user_id = int(user_id_str)
+        owner_id = event.sender_id
+        if owner_id not in MY_OWNER_IDS:
+            await event.answer("❌ Not authorized.", alert=True)
+            return
+        await event.edit(f"❌ Deposit rejected for user {user_id}")
+        await safe_send_main(user_id, "❌ Your deposit was rejected. Please try again or contact support.")
 
     elif data.startswith("approve_"):
-        # owner approval
+        # Legacy approve for premium purchase (manual payment)
         _, user_id_str, plan = data.split("_")
         user_id = int(user_id_str)
         owner_id = event.sender_id
         if owner_id not in MY_OWNER_IDS:
-            await event.answer("❌ You are not authorized.", alert=True)
+            await event.answer("❌ Not authorized.", alert=True)
             return
         days = {"monthly":30, "quarterly":90, "yearly":365}[plan]
         await add_premium_user(user_id, plan, days)
@@ -468,20 +550,18 @@ async def callback_handler(event):
         await MAIN_BOT_CLIENT.send_message(user_id, "You can now use all premium commands in your userbot. Type `.menu11` to see them.")
 
     elif data.startswith("reject_"):
+        # Legacy reject
         _, user_id_str = data.split("_")
         user_id = int(user_id_str)
         owner_id = event.sender_id
         if owner_id not in MY_OWNER_IDS:
-            await event.answer("❌ You are not authorized.", alert=True)
+            await event.answer("❌ Not authorized.", alert=True)
             return
         await event.edit(f"❌ Payment rejected for user {user_id}")
         await safe_send_main(user_id, "❌ Your payment was rejected. Please try again or contact support.")
-    
+
     else:
         await event.answer("Unknown action.")
-
-def plan_price(plan):
-    return {"monthly":"₹45", "quarterly":"₹120", "yearly":"₹490"}[plan]
 
 @MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/buy"))
 async def buy_cmd(event):
@@ -489,7 +569,6 @@ async def buy_cmd(event):
     if event.chat_id != user_id:
         await safe_reply(event, "Please use this command in private chat with me.")
         return
-    # Check if already premium
     prem = await check_premium_status(user_id)
     if prem:
         expiry = prem['expiry_date'].strftime("%Y-%m-%d")
@@ -502,58 +581,127 @@ async def buy_cmd(event):
     ]
     await safe_reply(event, "💰 **Select your premium plan:**", buttons=buttons)
 
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/deposit"))
+async def deposit_cmd(event):
+    user_id = event.sender_id
+    if event.chat_id != user_id:
+        await safe_reply(event, "Please use this in private chat.")
+        return
+    caption = (
+        "💰 **Deposit Funds**\n\n"
+        "1. Scan the QR below or use UPI: `{UPI_ID}`\n"
+        "2. Send any amount you want to deposit.\n"
+        "3. **After payment, send a screenshot of the transaction** with the **amount paid** in the caption.\n"
+        "4. Example caption: `I paid ₹100`\n"
+        "5. Our team will verify and credit your wallet."
+    ).format(UPI_ID=UPI_ID)
+    buttons = [[types.KeyboardButtonUrl("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)]]
+    try:
+        await event.reply(caption, file=QR_IMAGE_PATH, buttons=buttons)
+    except Exception as e:
+        await event.reply(caption + "\n\n⚠️ QR image not found. Please contact owner.", buttons=buttons)
+        print(f"Deposit QR send error: {e}")
+    user_states[user_id] = {"step": "waiting_deposit"}
+
 @MAIN_BOT_CLIENT.on(events.NewMessage)
 async def payment_handler(event):
     if event.chat_id != event.sender_id:
         return  # not private
     user_id = event.sender_id
-    if user_id not in user_states or user_states[user_id].get("step") != "waiting_payment":
-        return
-    # Check if message contains a photo
-    if not event.photo:
-        await safe_reply(event, "❌ Please send a screenshot image of the payment.")
-        return
-    # Forward to owners with approve/reject buttons
-    plan = user_states[user_id].get("plan", "monthly")
-    
-    # Get user details
-    try:
-        user_entity = await MAIN_BOT_CLIENT.get_entity(user_id)
-        user_name = user_entity.first_name or "Unknown"
-        user_username = f"@{user_entity.username}" if user_entity.username else "No username"
-    except:
-        user_name = "Unknown"
-        user_username = "Unknown"
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    caption = (
-        f"💳 **New Payment Request**\n"
-        f"👤 **User:** {user_name}\n"
-        f"🆔 **ID:** `{user_id}`\n"
-        f"🔗 **Username:** {user_username}\n"
-        f"📅 **Plan:** {plan.upper()}\n"
-        f"💰 **Amount:** {plan_price(plan)}\n"
-        f"⏰ **Time:** {now}"
-    )
-    
-    # Forward the photo
-    for owner in MY_OWNER_IDS:
+    state = user_states.get(user_id, {})
+    step = state.get("step")
+
+    # Handle deposit screenshot
+    if step == "waiting_deposit":
+        if not event.photo:
+            await safe_reply(event, "❌ Please send a screenshot image of the deposit transaction.")
+            return
+        # Extract amount from caption
+        caption_text = event.raw_text or ""
+        amount = None
+        # Try to extract a number from caption (simple regex)
+        match = re.search(r'(\d+(\.\d+)?)', caption_text)
+        if match:
+            amount = float(match.group(1))
+        if amount is None or amount <= 0:
+            await safe_reply(event, "❌ Please include the amount you paid in the caption.\nExample: `I paid ₹100`")
+            return
+        # Forward to owners with approve/reject buttons for deposit
         try:
-            fwd = await MAIN_BOT_CLIENT.forward_messages(owner, event.id, event.chat_id)
-            if fwd:
-                # Add buttons
-                await MAIN_BOT_CLIENT.send_message(
-                    owner,
-                    caption,
-                    buttons=[
-                        [types.KeyboardButtonCallback("✅ Approve", f"approve_{user_id}_{plan}")],
-                        [types.KeyboardButtonCallback("❌ Reject", f"reject_{user_id}")],
-                    ]
-                )
-        except Exception as e:
-            print(f"Failed to forward to owner {owner}: {e}")
-    await safe_reply(event, "✅ Your payment screenshot has been sent for verification. You will receive confirmation shortly.")
-    # clear state after a while? We'll keep but after approval it will be cleared.
+            user_entity = await MAIN_BOT_CLIENT.get_entity(user_id)
+            user_name = user_entity.first_name or "Unknown"
+            user_username = f"@{user_entity.username}" if user_entity.username else "No username"
+        except:
+            user_name = "Unknown"
+            user_username = "Unknown"
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        caption = (
+            f"💰 **New Deposit Request**\n"
+            f"👤 **User:** {user_name}\n"
+            f"🆔 **ID:** `{user_id}`\n"
+            f"🔗 **Username:** {user_username}\n"
+            f"💵 **Amount:** ₹{amount:.2f}\n"
+            f"⏰ **Time:** {now}"
+        )
+        for owner in MY_OWNER_IDS:
+            try:
+                fwd = await MAIN_BOT_CLIENT.forward_messages(owner, event.id, event.chat_id)
+                if fwd:
+                    await MAIN_BOT_CLIENT.send_message(
+                        owner,
+                        caption,
+                        buttons=[
+                            [types.KeyboardButtonCallback("✅ Approve", f"approve_deposit_{user_id}_{amount}")],
+                            [types.KeyboardButtonCallback("❌ Reject", f"reject_deposit_{user_id}")],
+                        ]
+                    )
+            except Exception as e:
+                print(f"Failed to forward deposit to owner {owner}: {e}")
+        await safe_reply(event, "✅ Your deposit screenshot has been sent for verification. You will receive confirmation shortly.")
+        # Keep state to avoid multiple submissions? We can clear after owner approval or keep.
+        return
+
+    # Handle legacy premium purchase (manual payment) – if user is in waiting_payment
+    if step == "waiting_payment":
+        if not event.photo:
+            await safe_reply(event, "❌ Please send a screenshot image of the payment.")
+            return
+        plan = state.get("plan", "monthly")
+        # Get user details
+        try:
+            user_entity = await MAIN_BOT_CLIENT.get_entity(user_id)
+            user_name = user_entity.first_name or "Unknown"
+            user_username = f"@{user_entity.username}" if user_entity.username else "No username"
+        except:
+            user_name = "Unknown"
+            user_username = "Unknown"
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        caption = (
+            f"💳 **New Payment Request**\n"
+            f"👤 **User:** {user_name}\n"
+            f"🆔 **ID:** `{user_id}`\n"
+            f"🔗 **Username:** {user_username}\n"
+            f"📅 **Plan:** {plan.upper()}\n"
+            f"💰 **Amount:** {plan_price_str(plan)}\n"
+            f"⏰ **Time:** {now}"
+        )
+        for owner in MY_OWNER_IDS:
+            try:
+                fwd = await MAIN_BOT_CLIENT.forward_messages(owner, event.id, event.chat_id)
+                if fwd:
+                    await MAIN_BOT_CLIENT.send_message(
+                        owner,
+                        caption,
+                        buttons=[
+                            [types.KeyboardButtonCallback("✅ Approve", f"approve_{user_id}_{plan}")],
+                            [types.KeyboardButtonCallback("❌ Reject", f"reject_{user_id}")],
+                        ]
+                    )
+            except Exception as e:
+                print(f"Failed to forward to owner {owner}: {e}")
+        await safe_reply(event, "✅ Your payment screenshot has been sent for verification. You will receive confirmation shortly.")
+        # Clear state so they don't send again
+        user_states.pop(user_id, None)
 
 # ─── BROADCAST COMMAND ──────────────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/broadcast"))
@@ -645,7 +793,7 @@ async def purnjanam_handler(event):
     
     await safe_reply(event, f"✅ **पुनर्जन्म पूर्ण!**\n🔄 {count} userbots restart kiye gaye.")
 
-# ─── GIFT PREMIUM (UPDATED) ─────────────────────────────────────
+# ─── GIFT PREMIUM ──────────────────────────────────────────────────
 @MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/giftpremium"))
 async def gift_premium(event):
     if event.sender_id not in MY_OWNER_IDS:
@@ -778,7 +926,7 @@ async def run_user_bot_with_restart(session_string, chat_id):
                 except:
                     pass
             await asyncio.sleep(5)
-            
+
 # ─── FULL USERBOT ENGINE ──────────────────────────────────────────
 async def run_user_bot(session_string, chat_id):
     user_bot = None
