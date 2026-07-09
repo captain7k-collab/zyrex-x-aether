@@ -2089,7 +2089,8 @@ async def run_user_bot(session_string, chat_id):
             "💭 Pressure creates diamonds.",
         ]
         # ─── NC PATTERNS ───
-       HINDINC_PATTERNS = [
+             # ─── NC PATTERNS ───
+        HINDINC_PATTERNS = [
             "{text} चुडाकड़ ⊹ ࣪ ﹏𓊝﹏𓂁﹏⊹ ࣪ ˖",
             "{text} रैंडी ˖ ࣪ ꉂ🗯˙🫐⃟.꩜‹—",
             "{text} गरीब ⊹ ࣪ ﹏𓊝﹏𓂁﹏⊹ ࣪ ˖",
