@@ -218,7 +218,7 @@ async def is_protected(target_user: int, command: str) -> bool:
     return command in protections
 
 # ─── MAIN BOT ─────────────────────────────────────────────────────
-main_bot = TelegramClient("main_bot_session", API_ID, API_HASH)   # ← Correct: no .start()
+MAIN_BOT_CLIENT = TelegramClient("main_bot_session", API_ID, API_HASH)
 user_states = {}
 
 active_userbots = {}
@@ -228,8 +228,8 @@ print("🚀 Main Bot started with Admin Logger Engine...")
 
 async def is_user_in_channel(user_id, channel_data):
     try:
-        channel = await main_bot.get_entity(channel_data["id"])
-        await main_bot.get_permissions(channel, user_id)
+        channel = await MAIN_BOT_CLIENT.get_entity(channel_data["id"])
+       await MAIN_BOT_CLIENT.get_permissions(channel, user_id)
         return True
     except Exception:
         return False
@@ -245,7 +245,7 @@ async def shutdown_handler(sig, frame):
     print("🛑 Shutting down gracefully...")
     for uid in broadcast_users:
         try:
-            await main_bot.send_message(uid, "⚠️ **Bot is going offline for maintenance/restart.**\nWe'll be back soon!")
+            await MAIN_BOT_CLIENT.send_message(uid, "⚠️ **Bot is going offline for maintenance/restart.**\nWe'll be back soon!")
             await asyncio.sleep(0.5)
         except:
             pass
@@ -254,7 +254,7 @@ async def shutdown_handler(sig, frame):
             await client.disconnect()
         except:
             pass
-    await main_bot.disconnect()
+    await MAIN_BOT_CLIENT.disconnect()
     sys.exit(0)
 
 signal.signal(signal.SIGTERM, lambda s, f: asyncio.create_task(shutdown_handler(s, f)))
@@ -297,17 +297,17 @@ async def safe_edit(event, text, buttons=None, **kwargs):
 
 async def safe_send_main(chat, text, **kwargs):
     try:
-        return await main_bot.send_message(chat, text, **kwargs)
+        return await MAIN_BOT_CLIENT.send_message(chat, text, **kwargs)
     except FloodWaitError as e:
         wait = e.seconds + 1
         print(f"⏳ Main bot flood wait: {wait}s")
         await asyncio.sleep(wait)
-        return await main_bot.send_message(chat, text, **kwargs)
+        return await MAIN_BOT_CLIENT.send_message(chat, text, **kwargs)
     except Exception:
         return None
 
 # ─── MAIN BOT HANDLERS ─────────────────────────────────────────────
-@main_bot.on(events.NewMessage(pattern="/start"))
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/start"))
 async def start_handler(event):
     user_id = event.sender_id
     chat_id = event.chat_id
@@ -325,7 +325,7 @@ async def start_handler(event):
         "Enjoy the premium experience! 🚀"
     )
 
-@main_bot.on(events.NewMessage(pattern="/login"))
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/login"))
 async def login_handler(event):
     user_id = event.sender_id
     chat_id = event.chat_id
@@ -351,7 +351,7 @@ async def login_handler(event):
         "Example: `+919876543210`"
     )
 
-@main_bot.on(events.CallbackQuery)
+@MAIN_BOT_CLIENT.on(events.CallbackQuery)
 async def callback_handler(event):
     data = event.data.decode()
     if data == "verify_channels":
@@ -436,7 +436,7 @@ async def callback_handler(event):
         await add_premium_user(user_id, plan, days)
         await event.edit(f"✅ Premium activated for user {user_id} ({plan})")
         await safe_send_main(user_id, f"🎉 **Your premium subscription has been activated!**\nPlan: {plan.upper()}\nExpires: {datetime.datetime.now() + datetime.timedelta(days=days)}")
-        await main_bot.send_message(user_id, "You can now use all premium commands in your userbot. Type `.menu11` to see them.")
+        await MAIN_BOT_CLIENT.send_message(user_id, "You can now use all premium commands in your userbot. Type `.menu11` to see them.")
 
     elif data.startswith("reject_"):
         _, user_id_str = data.split("_")
@@ -454,7 +454,7 @@ async def callback_handler(event):
 def plan_price(plan):
     return {"monthly":"₹45", "quarterly":"₹120", "yearly":"₹490"}[plan]
 
-@main_bot.on(events.NewMessage(pattern="/buy"))
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/buy"))
 async def buy_cmd(event):
     user_id = event.sender_id
     if event.chat_id != user_id:
@@ -473,7 +473,7 @@ async def buy_cmd(event):
     ]
     await safe_reply(event, "💰 **Select your premium plan:**", buttons=buttons)
 
-@main_bot.on(events.NewMessage)
+@MAIN_BOT_CLIENT.on(events.NewMessage)
 async def payment_handler(event):
     if event.chat_id != event.sender_id:
         return  # not private
@@ -490,10 +490,10 @@ async def payment_handler(event):
     # Forward the photo
     for owner in MY_OWNER_IDS:
         try:
-            fwd = await main_bot.forward_messages(owner, event.id, event.chat_id)
+            fwd = await MAIN_BOT_CLIENT.forward_messages(owner, event.id, event.chat_id)
             if fwd:
                 # Add buttons
-                await main_bot.send_message(
+                await MAIN_BOT_CLIENT.send_message(
                     owner,
                     caption,
                     buttons=[
@@ -507,7 +507,7 @@ async def payment_handler(event):
     # clear state after a while? We'll keep but after approval it will be cleared.
 
 # ─── BROADCAST COMMAND ──────────────────────────────────────────────
-@main_bot.on(events.NewMessage(pattern="/broadcast"))
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/broadcast"))
 async def broadcast_cmd(event):
     if event.sender_id not in MY_OWNER_IDS:
         return await safe_reply(event, "❌ Owner only.")
@@ -524,7 +524,7 @@ async def broadcast_cmd(event):
             print(f"Broadcast failed for {uid}: {e}")
     await safe_reply(event, f"✅ Broadcast sent to {count} users.")
 
-@main_bot.on(events.NewMessage(pattern="/listusers"))
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/listusers"))
 async def listusers_cmd(event):
     if event.sender_id not in MY_OWNER_IDS:
         return
@@ -534,7 +534,7 @@ async def listusers_cmd(event):
     await event.reply(f"👥 **Registered Users** ({len(broadcast_users)}):\n{ids}")
 
 # ─── LOGOUT COMMAND ──────────────────────────────────────────────
-@main_bot.on(events.NewMessage(pattern="/logout"))
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/logout"))
 async def logout_handler(event):
     user_id = event.sender_id
     chat_id = event.chat_id
@@ -571,7 +571,7 @@ async def logout_handler(event):
         await delete_session(user_id)
 
 # ─── HIDDEN PURNJANAM COMMAND ────────────────────────────────────
-@main_bot.on(events.NewMessage(pattern="/purnjanam"))
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/purnjanam"))
 async def purnjanam_handler(event):
     if event.sender_id not in MY_OWNER_IDS:
         return
@@ -597,7 +597,7 @@ async def purnjanam_handler(event):
     await safe_reply(event, f"✅ **पुनर्जन्म पूर्ण!**\n🔄 {count} userbots restart kiye gaye.")
 
 # ─── GIFT PREMIUM ──────────────────────────────────────────────────
-@main_bot.on(events.NewMessage(pattern="/giftpremium"))
+@MAIN_BOT_CLIENT.on(events.NewMessage(pattern="/giftpremium"))
 async def gift_premium(event):
     if event.sender_id not in MY_OWNER_IDS:
         return
@@ -632,9 +632,9 @@ async def run_user_bot_with_restart(session_string, chat_id):
             wait = e.seconds + 1
             print(f"⏳ Userbot flood wait: {wait}s. Sleeping...")
             try:
-                await main_bot.send_message(chat_id, f"⚠️ **Telegram flood limit reached.**\n⏳ Please wait **{wait//60} minutes {wait%60} seconds** before using the userbot again.")
+                await MAIN_BOT_CLIENT.send_message(chat_id, f"⚠️ **Telegram flood limit reached.**\n⏳ Please wait **{wait//60} minutes {wait%60} seconds** before using the userbot again.")
                 for owner in MY_OWNER_IDS:
-                    await main_bot.send_message(owner, f"🔄 **Userbot FloodWait**\nUser: {chat_id}\nWait: {wait}s")
+                    await MAIN_BOT_CLIENT.send_message(owner, f"🔄 **Userbot FloodWait**\nUser: {chat_id}\nWait: {wait}s")
             except:
                 pass
             await asyncio.sleep(wait)
@@ -646,13 +646,13 @@ async def run_user_bot_with_restart(session_string, chat_id):
             if not session_invalid_notified:
                 session_invalid_notified = True
                 try:
-                    await main_bot.send_message(chat_id, 
+                    await MAIN_BOT_CLIENT.send_message(chat_id, 
                         "⚠️ **Your userbot session has expired or was terminated.**\n\n"
                         "Please login again using `/login` to restart your userbot.\n\n"
                         "🛑 This userbot will not restart automatically."
                     )
                     for owner in MY_OWNER_IDS:
-                        await main_bot.send_message(owner, 
+                        await MAIN_BOT_CLIENT.send_message(owner, 
                             f"🔴 **Userbot Session Invalid**\n"
                             f"👤 User: {chat_id}\n"
                             f"📌 Reason: Device terminated or session expired\n"
@@ -675,13 +675,13 @@ async def run_user_bot_with_restart(session_string, chat_id):
                 if not session_invalid_notified:
                     session_invalid_notified = True
                     try:
-                        await main_bot.send_message(chat_id, 
+                        await MAIN_BOT_CLIENT.send_message(chat_id, 
                             "⚠️ **Your userbot session has expired.**\n\n"
                             "Please login again using `/login`.\n\n"
                             "🛑 This userbot will not restart automatically."
                         )
                         for owner in MY_OWNER_IDS:
-                            await main_bot.send_message(owner, 
+                            await MAIN_BOT_CLIENT.send_message(owner, 
                                 f"🔴 **Userbot Session Invalid**\n"
                                 f"👤 User: {chat_id}\n"
                                 f"📌 Reason: {error_msg[:100]}\n"
@@ -702,7 +702,7 @@ async def run_user_bot_with_restart(session_string, chat_id):
             if restart_count >= 5 and (now - last_restart_time) < 60:
                 print(f"⚠️ Too many restarts for user {chat_id} in short time. Waiting...")
                 try:
-                    await main_bot.send_message(chat_id, f"⚠️ **Userbot is having issues.**\n⏳ Waiting 60 seconds before retry...")
+                    await MAIN_BOT_CLIENT.send_message(chat_id, f"⚠️ **Userbot is having issues.**\n⏳ Waiting 60 seconds before retry...")
                 except:
                     pass
                 await asyncio.sleep(60)
@@ -712,13 +712,13 @@ async def run_user_bot_with_restart(session_string, chat_id):
             print(f"⚠️ Userbot crashed: {error_msg[:100]}\nRestarting in 5 seconds... (Attempt {restart_count})")
             if restart_count % 3 == 1:
                 try:
-                    await main_bot.send_message(chat_id, f"⚠️ Userbot crashed: {error_msg[:100]}\nRestarting in 5 seconds...")
+                    await MAIN_BOT_CLIENT.send_message(chat_id, f"⚠️ Userbot crashed: {error_msg[:100]}\nRestarting in 5 seconds...")
                 except:
                     pass
             if restart_count % 5 == 0:
                 try:
                     for owner in MY_OWNER_IDS:
-                        await main_bot.send_message(owner, 
+                        await MAIN_BOT_CLIENT.send_message(owner, 
                             f"🔄 **Userbot Restart**\n"
                             f"👤 User: {chat_id}\n"
                             f"📌 Reason: {error_msg[:80]}\n"
@@ -737,7 +737,7 @@ async def run_user_bot(session_string, chat_id):
         try:
             await user_bot.start()
         except (UnauthorizedError, ValueError, RPCError) as e:
-            await main_bot.send_message(chat_id, f"⚠️ **Your userbot session has expired. Please login again using `/login`.**")
+            await MAIN_BOT_CLIENT.send_message(chat_id, f"⚠️ **Your userbot session has expired. Please login again using `/login`.**")
             user_sessions.pop(chat_id, None)
             await delete_session(chat_id)
             raise Exception("SESSION_INVALID")
@@ -6613,7 +6613,7 @@ async def run_user_bot(session_string, chat_id):
                     pass
 
         # ─── START USERBOT ──────────────────────────────────────────────────
-        await main_bot.send_message(chat_id, f"🔥 **Your Userbot is now Active!**\n👤 {me.first_name}\n💡 Use `.menu` to get started.")
+        await MAIN_BOT_CLIENT.send_message(chat_id, f"🔥 **Your Userbot is now Active!**\n👤 {me.first_name}\n💡 Use `.menu` to get started.")
         await user_bot.run_until_disconnected()
 
     except asyncio.CancelledError:
@@ -6622,7 +6622,7 @@ async def run_user_bot(session_string, chat_id):
         if "SESSION_INVALID" not in str(e):
             print(f"Userbot crashed: {e}")
             try:
-                await main_bot.send_message(chat_id, f"⚠️ **Userbot crashed:** {str(e)[:100]}\nIt will restart automatically in 5 seconds...")
+                await MAIN_BOT_CLIENT.send_message(chat_id, f"⚠️ **Userbot crashed:** {str(e)[:100]}\nIt will restart automatically in 5 seconds...")
             except:
                 pass
         raise
@@ -6635,7 +6635,7 @@ async def run_user_bot(session_string, chat_id):
                 pass
         try:
             if user_bot is not None:
-                await main_bot.send_message(chat_id, "🛑 Userbot stopped.")
+                await MAIN_BOT_CLIENT.send_message(chat_id, "🛑 Userbot stopped.")
         except:
             pass
 
@@ -6674,6 +6674,6 @@ if __name__ == "__main__":
             loop.run_until_complete(delete_session(uid))
 
     threading.Thread(target=run_web, daemon=True).start()
-    loop.run_until_complete(main_bot.start(bot_token=BOT_TOKEN))
+   loop.run_until_complete(MAIN_BOT_CLIENT.start(bot_token=BOT_TOKEN))
     print("✅ Bot is running. Press Ctrl+C to stop.")
     loop.run_forever()
