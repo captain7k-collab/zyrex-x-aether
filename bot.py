@@ -70,20 +70,24 @@ async def init_db():
         raise Exception("DATABASE_URL not set")
     db_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=5)
     async with db_pool.acquire() as conn:
+        # ─── user_sessions table ───
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS user_sessions (
                 user_id BIGINT PRIMARY KEY,
                 session_encrypted TEXT NOT NULL,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """)   # <-- closing triple quote HERE
+
+        # ─── app_config table ───
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS app_config (
                 key_name TEXT PRIMARY KEY,
                 key_value TEXT NOT NULL
             )
         """)
-        # Premium tables
+
+        # ─── premium_users table ───
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS premium_users (
                 user_id BIGINT PRIMARY KEY,
@@ -93,6 +97,8 @@ async def init_db():
                 status TEXT DEFAULT 'active'
             )
         """)
+
+        # ─── premium_protections table ───
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS premium_protections (
                 user_id BIGINT,
@@ -219,17 +225,17 @@ async def is_protected(target_user: int, command: str) -> bool:
 
 # ─── MAIN BOT ─────────────────────────────────────────────────────
 MAIN_BOT_CLIENT = TelegramClient("main_bot_session", API_ID, API_HASH)
-user_states = {}
 
 active_userbots = {}
 user_sessions = {}
 
 print("🚀 Main Bot started with Admin Logger Engine...")
+print("DEBUG: MAIN_BOT_CLIENT type =", type(MAIN_BOT_CLIENT))   # ✅ This is correct
 
 async def is_user_in_channel(user_id, channel_data):
     try:
-        channel = await MAIN_BOT_CLIENT.get_entity(channel_data["id"])
-        await MAIN_BOT_CLIENT.get_permissions(channel, user_id)
+        channel = await MAIN_BOT_CLIENT.get_entity(channel_data["id"])   # 8 spaces
+        await MAIN_BOT_CLIENT.get_permissions(channel, user_id)          # 8 spaces – same as above
         return True
     except Exception:
         return False
