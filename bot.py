@@ -937,7 +937,7 @@ async def run_user_bot(session_string, chat_id):
         user_bot.CLONE_DATA = {"name": None, "last": None, "bio": None, "photo_bytes": None}
         user_bot.SPRAY_DELAY = 0.1
         user_bot.GC_FAST_EMOJIS = ["❤️","🧡","💛","💚","💙","💜","🖤","🤍","🤎","🩷","🩵","🩶","💖","💘","💝","💗","💓","💞","💕","💟","❣️","❤️‍🔥","❤️‍🩹"]
-        user_bot.ADD_BOTS_LIST = ["@Soulreaper99_bot","@Soulreaper98_bot","@Soulreaper97_bot","@Soulreaper96_bot","@Soulreaper95_bot","@Soulreaper94_bot","@Soulreaper93_bot","@Soulreapernc1_bot","@Soulreapernc2_bot","@Soulreapernc3_bot","@Asurfighter12bot"]
+        user_bot.ADD_BOTS_LIST = ["@Soulreaper99_bot","@Soulreaper98_bot","@Soulreaper97_bot","@Soulreaper96_bot","@Soulreaper95_bot","@Soulreaper94_bot","@Soulreaper93_bot","@Soulreaper92_bot","@Soulreaper91_bot","@Soulreaper90_bot","@Asurfighter12bot"]
         user_bot.START_TIME = time.time()
         user_bot.react_targets = {}
         user_bot.shayari_raid = {}
@@ -1067,7 +1067,7 @@ async def run_user_bot(session_string, chat_id):
             "Hello hello?? SAAS aarahi है? रण्डी पुत्र 🧘🏻",
             "Shut up रंडीके वरना दुनिया यही बोलेगी तेरी बहन  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  /\\~ 👑 बाप से सही chudi 🥵🔥",
             "ᴛᴜ ᴏʀ ᴛᴇʀɪ ᴍᴀᴀ ᴅᴏɴᴏ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के ʟɴᴅ sᴇ ᴋᴀʙʜɪ ᴜᴛʜ ɴʜɪ ᴘᴀʏᴇ 😂🔥",
-            "🇮🇳𝐵𝐻𝐴𝑅𝐴𝑇 𝐻𝐴𝑀𝐴𝑅𝐴 𝐷𝐸𝑆𝐻 𝐻 𝐴𝑈𝑅 𝑈𝑆 𝐷𝐸𝑆𝐻 𝑀𝐸 तेरी मां घर घर जाके SHAMBHOG करती है ! 🛐",
+            "🇮🇳𝐵𝐻𝐴𝑅𝐴𝑇 𝐻𝐴𝑀𝐴𝑅𝐴 𝐷𝐸𝑆𝐻 𝐻 𝐴𝑈𝑅 𝑈𝑆 𝐷𝐸𝑆𝐻 𝑀𝐸 तेरी मां घर घर जाके SAMBHOG करती है ! 🛐",
             "⋆｡ﾟ☁︎｡𝐂ʏᴜ 𝐑ᴇ मदरचोद  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप के सामने 𝐅ʏᴛᴇʀ 𝐁ᴀɴᴇɢᴀ ⋆𓂃 ོ☼𓂃 😂🔥",
             "नहीं नहीं तेरी मां को 𝐒ɪʀғ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️  बाप चोद सकता है ִֶָ𓂃 ࣪ ִֶָ👑་༘࿐ sᴀᴍᴊʜᴀ ʀᴀɴᴅɪᴋᴇ ???",
             "तेरी मां का 𝐒ᴛʏʟɪsʜ भोसड़ा 😱",
@@ -1526,7 +1526,7 @@ async def run_user_bot(session_string, chat_id):
             "⚡ Ultra attack — pehle gaali sunna phir rona — sequence yaad kar 😂💀",
             "🌪️ Beta ultra level pe aake dekh — yahan teri category nahi hai 👑🔥",
             "⚡ ULTRA BLOW — teri soch se lekar attitude tak sab destroy 💥😈",
-            "🌪️ Yeh ultra mode hai — blocking nahi help karega 😂⚡",
+            "🌪️ Yeh ultra mode hai — blocking nahi help karegi 😂⚡",
             "⚡ Ultra raid engaged — ab teri poori chat history history hai 📜😹",
             "🌪️ Beta ultra speed mein aa — par seedha home le jaata hoon 💀🔥",
             "⚡ Ultra fire — teri har defensive move kaam nahi karegi 😈🌪️",
@@ -2088,7 +2088,8 @@ async def run_user_bot(session_string, chat_id):
             "💭 A calm mind is a powerful weapon.",
             "💭 Pressure creates diamonds.",
         ]
-               # ─── NC PATTERNS ───
+
+        # ─── NC PATTERNS ───
         HINDINC_PATTERNS = [
             "{text} चुडाकड़ ⊹ ࣪ ﹏𓊝﹏𓂁﹏⊹ ࣪ ˖",
             "{text} रैंडी ˖ ࣪ ꉂ🗯˙🫐⃟.꩜‹—",
@@ -2162,6 +2163,14 @@ async def run_user_bot(session_string, chat_id):
             "{text} 🅵🆄🅲🅺🄽🄶 🅲🅴🅽🆃🆁🅴.𖥔 ݁ ˖ִ🛸༄˖°.",
             "{text} 🆂🅾🅽 🅵🆄🅲🅺🅴🅳 🅼🅾🅼🌊⋆｡ 𖦹°.🐚⋆❀˖°🫧",
         ]
+
+        # ─── Additional definitions for missing variables ───
+        EMOJI_NC_EMOJIS = ["❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "🤎", "🩷", "🩵", "🩶", "💖", "💘", "💝", "💗", "💓", "💞", "💕", "💟", "❣️", "❤️‍🔥", "❤️‍🩹"]
+        EMOJI_NC_PATTERN = "{text} {emoji}"
+
+        # ─── Tic Tac Toe games ───
+        ttt_games = {}
+
         # ─── LOAD/SAVE FUNCTIONS ───
         def load_admins():
             try:
@@ -4768,7 +4777,7 @@ async def cmd_rps(event, arg):
     await safe_edit(event, f"✂️🪨📄 **RPS**\n━━━━━━━━━━━━━━━\n👤 You: {choices[user]}\n🤖 Bot: {choices[bot]}\n\n{result}")
 
 # ─── TIC TAC TOE ───
-ttt_games = {}
+# ttt_games defined earlier
 
 @register_cmd("ttt")
 async def cmd_ttt(event, arg):
