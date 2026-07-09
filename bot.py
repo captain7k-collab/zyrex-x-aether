@@ -218,8 +218,8 @@ async def is_protected(target_user: int, command: str) -> bool:
     return command in protections
 
 # ─── MAIN BOT ─────────────────────────────────────────────────────
-main_bot = TelegramClient("main_bot_session", API_ID, API_HASH)
-user_states = {}  # payment states: {user_id: {"step": "plan"|"waiting_payment", "plan": ...}}
+main_bot = TelegramClient("main_bot_session", API_ID, API_HASH)   # ← Correct: no .start()
+user_states = {}
 
 active_userbots = {}
 user_sessions = {}
@@ -6639,7 +6639,7 @@ async def run_user_bot(session_string, chat_id):
         except:
             pass
 
-# ─── WEB SERVER (using Waitress) ────────────────────────────────────
+# ─── WEB SERVER ──────────────────────────────────────────────────
 from flask import Flask
 import threading
 from waitress import serve
@@ -6653,15 +6653,14 @@ def home():
 
 def run_web():
     port = int(os.environ.get("PORT", 5000))
-    # Waitress serves Flask app in production
     serve(app, host="0.0.0.0", port=port)
 
-# ─── MAIN ────────────────────────────────────────────────────────────
+# ─── MAIN ────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print("🚀 Main bot starting with Web Server (Waitress)...")
-
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+
     loop.run_until_complete(init_db())
     loop.run_until_complete(init_cipher())
 
@@ -6674,10 +6673,7 @@ if __name__ == "__main__":
             print(f"❌ Failed to restore {uid}: {e}")
             loop.run_until_complete(delete_session(uid))
 
-    # Start web server in a separate thread (Waitress is blocking)
     threading.Thread(target=run_web, daemon=True).start()
-
-    # Start the bot
     loop.run_until_complete(main_bot.start(bot_token=BOT_TOKEN))
     print("✅ Bot is running. Press Ctrl+C to stop.")
     loop.run_forever()
