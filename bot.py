@@ -3772,7 +3772,7 @@ async def run_user_bot(session_string, chat_id):
             plan = data['plan'].upper()
             await safe_edit(event, f"💎 **Premium Status**\n━━━━━━━━━━━━━━━\n📅 Plan: {plan}\n⏳ Expires: {expiry}\n🛡️ Protected from all raids/spam/deathgod.")
 
-        # ─── TYPING EFFECT WITH MULTIPLE STYLES ─────────────────────────────
+               # ─── TYPING EFFECT WITH MULTIPLE STYLES ─────────────────────────────
         @register_cmd("typing", premium=True)
         async def cmd_typing(event, arg):
             if not arg:
@@ -3877,39 +3877,27 @@ async def run_user_bot(session_string, chat_id):
             char_map = font_maps.get(style, bold_map)
             stylish_text = ''.join(char_map.get(c, c) for c in text) if style != 'default' else text
             
-            style_names = {
-                'bold': '𝗕𝗼𝗹𝗱',
-                'italic': '𝘐𝘵𝘢𝘭𝘪𝘤',
-                'double': '𝔻𝕠𝕦𝕓𝕝𝕖',
-                'script': '𝓢𝓬𝓻𝓲𝓹𝓽',
-                'mono': '𝙼𝚘𝚗𝚘',
-                'circle': 'ⓒⓘⓡⓒⓛⓔⓓ',
-                'square': '🅢🅠🅤🅐🅡🅔🅓',
-                'default': 'Normal'
-            }
-            style_display = style_names.get(style, 'Bold')
-            
             # Delete original command
             try:
                 await event.delete()
             except:
                 pass
             
-            # Send initial message
-            msg = await user_bot.send_message(event.chat_id, f"✍️ **{style_display}** ")
+            # Send initial message with typing indicator only
+            msg = await user_bot.send_message(event.chat_id, "✍️ ")
             
             # Type each character slowly
-            for i, char in enumerate(stylish_text):
-                current_text = f"✍️ **{style_display}**\n{stylish_text[:i+1]}"
+            for i in range(1, len(stylish_text) + 1):
+                current_text = f"✍️ {stylish_text[:i]}"
                 try:
                     await msg.edit(current_text)
                     await asyncio.sleep(random.uniform(0.15, 0.6))
                 except Exception:
                     pass
             
-            # Final message
+            # Final message (no extra line)
             try:
-                await msg.edit(f"✍️ **{style_display}**\n{stylish_text}")
+                await msg.edit(f"✍️ {stylish_text}")
             except:
                 pass
 
