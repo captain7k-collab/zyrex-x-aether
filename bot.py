@@ -802,6 +802,79 @@ async def callback_handler(event):
         await event.edit(f"❌ Payment rejected for user {user_id}")
         await safe_send_main(user_id, "❌ Your payment was rejected. Please try again or contact support.")
 
+    # ─── NEW CALLBACKS FOR BEST FRIEND, MARRIAGE, DIVORCE ───
+    elif data.startswith("bestfrnd_yes_"):
+        _, _, uid = data.split("_")
+        uid = int(uid)
+        sender = event.sender_id
+        try:
+            u = await MAIN_BOT_CLIENT.get_entity(uid)
+            name = u.first_name or str(uid)
+            await event.edit(f"💞 **{name}** said YES! 🎉\nYou are now best friends forever! 🌟")
+            await MAIN_BOT_CLIENT.send_message(uid, f"💞 {sender} asked you to be best friend and you said YES! 🥳")
+        except:
+            await event.edit("❌ Something went wrong.")
+
+    elif data.startswith("bestfrnd_no_"):
+        _, _, uid = data.split("_")
+        uid = int(uid)
+        sender = event.sender_id
+        try:
+            u = await MAIN_BOT_CLIENT.get_entity(uid)
+            name = u.first_name or str(uid)
+            await event.edit(f"💔 **{name}** said NO. 😢\nMaybe next time...")
+            await MAIN_BOT_CLIENT.send_message(uid, f"💔 {sender} asked you to be best friend but you said NO.")
+        except:
+            await event.edit("❌ Something went wrong.")
+
+    elif data.startswith("marriage_yes_"):
+        _, _, uid = data.split("_")
+        uid = int(uid)
+        sender = event.sender_id
+        try:
+            u = await MAIN_BOT_CLIENT.get_entity(uid)
+            name = u.first_name or str(uid)
+            await event.edit(f"💍 **{name}** said YES! 💍🎉\nYou are now married! ❤️")
+            await MAIN_BOT_CLIENT.send_message(uid, f"💍 {sender} proposed and you said YES! Congratulations! 🥂")
+        except:
+            await event.edit("❌ Something went wrong.")
+
+    elif data.startswith("marriage_no_"):
+        _, _, uid = data.split("_")
+        uid = int(uid)
+        sender = event.sender_id
+        try:
+            u = await MAIN_BOT_CLIENT.get_entity(uid)
+            name = u.first_name or str(uid)
+            await event.edit(f"💔 **{name}** said NO. 😢\nMaybe next time...")
+            await MAIN_BOT_CLIENT.send_message(uid, f"💔 {sender} proposed but you said NO.")
+        except:
+            await event.edit("❌ Something went wrong.")
+
+    elif data.startswith("divorce_yes_"):
+        _, _, uid = data.split("_")
+        uid = int(uid)
+        sender = event.sender_id
+        try:
+            u = await MAIN_BOT_CLIENT.get_entity(uid)
+            name = u.first_name or str(uid)
+            await event.edit(f"💔 **{name}** agreed to divorce. 😢\nIt's over...")
+            await MAIN_BOT_CLIENT.send_message(uid, f"💔 {sender} wants a divorce and you agreed.")
+        except:
+            await event.edit("❌ Something went wrong.")
+
+    elif data.startswith("divorce_no_"):
+        _, _, uid = data.split("_")
+        uid = int(uid)
+        sender = event.sender_id
+        try:
+            u = await MAIN_BOT_CLIENT.get_entity(uid)
+            name = u.first_name or str(uid)
+            await event.edit(f"💔 **{name}** said NO to divorce. 💔\nMaybe try to work it out?")
+            await MAIN_BOT_CLIENT.send_message(uid, f"💔 {sender} asked for divorce but you said NO.")
+        except:
+            await event.edit("❌ Something went wrong.")
+
     else:
         await event.answer("Unknown action.")
 
@@ -5602,7 +5675,292 @@ async def run_user_bot(session_string, chat_id):
                     stop_loader.set(); loader_task.cancel()
                     await safe_edit(event, f"❌ DMusic error: {e}")
             asyncio.create_task(download_music())
+              # ─── FUN METERS (Menu7) ──────────────────────────────────────────────
 
+        @register_cmd("studmeter")
+        async def cmd_studmeter(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                targets = {event.sender_id}
+            for uid in targets:
+                try:
+                    u = await user_bot.get_entity(uid)
+                    name = u.first_name or str(uid)
+                    percent = random.randint(0, 100)
+                    await event.reply(f"📊 **Stud Meter**\n{name} is **{percent}%** Stud! 💪😎")
+                except:
+                    pass
+
+        @register_cmd("looks")
+        async def cmd_looks(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                targets = {event.sender_id}
+            for uid in targets:
+                try:
+                    u = await user_bot.get_entity(uid)
+                    name = u.first_name or str(uid)
+                    percent = random.randint(0, 100)
+                    await event.reply(f"📊 **Looks Meter**\n{name} is **{percent}%** Good-looking! 😍✨")
+                except:
+                    pass
+
+        @register_cmd("gay")
+        async def cmd_gay(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                targets = {event.sender_id}
+            for uid in targets:
+                try:
+                    u = await user_bot.get_entity(uid)
+                    name = u.first_name or str(uid)
+                    percent = random.randint(0, 100)
+                    await event.reply(f"📊 **Gay Meter**\n{name} is **{percent}%** Gay! 🏳️‍🌈")
+                except:
+                    pass
+
+        @register_cmd("lesbian")
+        async def cmd_lesbian(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                targets = {event.sender_id}
+            for uid in targets:
+                try:
+                    u = await user_bot.get_entity(uid)
+                    name = u.first_name or str(uid)
+                    percent = random.randint(0, 100)
+                    await event.reply(f"📊 **Lesbian Meter**\n{name} is **{percent}%** Lesbian! 👩‍❤️‍👩")
+                except:
+                    pass
+
+        @register_cmd("straight")
+        async def cmd_straight(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                targets = {event.sender_id}
+            for uid in targets:
+                try:
+                    u = await user_bot.get_entity(uid)
+                    name = u.first_name or str(uid)
+                    percent = random.randint(0, 100)
+                    await event.reply(f"📊 **Straight Meter**\n{name} is **{percent}%** Straight! 👫")
+                except:
+                    pass
+
+        @register_cmd("bi")
+        async def cmd_bi(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                targets = {event.sender_id}
+            for uid in targets:
+                try:
+                    u = await user_bot.get_entity(uid)
+                    name = u.first_name or str(uid)
+                    percent = random.randint(0, 100)
+                    await event.reply(f"📊 **Bi Meter**\n{name} is **{percent}%** Bi! 💖💜💙")
+                except:
+                    pass
+
+        @register_cmd("trans")
+        async def cmd_trans(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                targets = {event.sender_id}
+            for uid in targets:
+                try:
+                    u = await user_bot.get_entity(uid)
+                    name = u.first_name or str(uid)
+                    percent = random.randint(0, 100)
+                    await event.reply(f"📊 **Trans Meter**\n{name} is **{percent}%** Trans! ⚧️")
+                except:
+                    pass
+
+        @register_cmd("simp")
+        async def cmd_simp(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                targets = {event.sender_id}
+            for uid in targets:
+                try:
+                    u = await user_bot.get_entity(uid)
+                    name = u.first_name or str(uid)
+                    percent = random.randint(0, 100)
+                    await event.reply(f"📊 **Simp Meter**\n{name} is **{percent}%** Simp! 🥺💀")
+                except:
+                    pass
+
+        @register_cmd("chad")
+        async def cmd_chad(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                targets = {event.sender_id}
+            for uid in targets:
+                try:
+                    u = await user_bot.get_entity(uid)
+                    name = u.first_name or str(uid)
+                    percent = random.randint(0, 100)
+                    await event.reply(f"📊 **Chad Meter**\n{name} is **{percent}%** Chad! 🗿🔥")
+                except:
+                    pass
+
+        @register_cmd("friendly")
+        async def cmd_friendly(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                targets = {event.sender_id}
+            for uid in targets:
+                try:
+                    u = await user_bot.get_entity(uid)
+                    name = u.first_name or str(uid)
+                    percent = random.randint(0, 100)
+                    await event.reply(f"📊 **Friendly Meter**\n{name} is **{percent}%** Friendly! 🤗😊")
+                except:
+                    pass
+
+        @register_cmd("rizz")
+        async def cmd_rizz(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                targets = {event.sender_id}
+            for uid in targets:
+                try:
+                    u = await user_bot.get_entity(uid)
+                    name = u.first_name or str(uid)
+                    score = random.randint(1, 100)
+                    await event.reply(f"📊 **Rizz Meter**\n{name} has **{score}** Rizz! 😏🔥")
+                except:
+                    pass
+
+        @register_cmd("iq")
+        async def cmd_iq(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                targets = {event.sender_id}
+            for uid in targets:
+                try:
+                    u = await user_bot.get_entity(uid)
+                    name = u.first_name or str(uid)
+                    score = random.randint(1, 200)
+                    await event.reply(f"📊 **IQ Score**\n{name} has an IQ of **{score}** 🧠💡")
+                except:
+                    pass
+
+        @register_cmd("stupidmeter")
+        async def cmd_stupidmeter(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                targets = {event.sender_id}
+            for uid in targets:
+                try:
+                    u = await user_bot.get_entity(uid)
+                    name = u.first_name or str(uid)
+                    percent = random.randint(0, 100)
+                    await event.reply(f"📊 **Stupid Meter**\n{name} is **{percent}%** Stupid! 🤪")
+                except:
+                    pass
+
+        @register_cmd("sigma")
+        async def cmd_sigma(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                targets = {event.sender_id}
+            for uid in targets:
+                try:
+                    u = await user_bot.get_entity(uid)
+                    name = u.first_name or str(uid)
+                    percent = random.randint(0, 100)
+                    await event.reply(f"📊 **Sigma Meter**\n{name} is **{percent}%** Sigma! 🐺🔥")
+                except:
+                    pass
+
+        @register_cmd("pookie")
+        async def cmd_pookie(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                targets = {event.sender_id}
+            for uid in targets:
+                try:
+                    u = await user_bot.get_entity(uid)
+                    name = u.first_name or str(uid)
+                    percent = random.randint(0, 100)
+                    await event.reply(f"📊 **Pookie Meter**\n{name} is **{percent}%** Pookie! 🧸💕")
+                except:
+                    pass
+
+        @register_cmd("baddie")
+        async def cmd_baddie(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                targets = {event.sender_id}
+            for uid in targets:
+                try:
+                    u = await user_bot.get_entity(uid)
+                    name = u.first_name or str(uid)
+                    percent = random.randint(0, 100)
+                    await event.reply(f"📊 **Baddie Meter**\n{name} is **{percent}%** Baddie! 💅✨")
+                except:
+                    pass
+
+        # ─── BEST FRIEND, DIVORCE, MARRIAGE ──────────────────────────────────
+
+        @register_cmd("bestfrnd")
+        async def cmd_bestfrnd(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return await safe_edit(event, "❌ Please reply to someone or tag a user.")
+            uid = next(iter(targets))
+            try:
+                u = await user_bot.get_entity(uid)
+                name = u.first_name or str(uid)
+                msg = f"💖 **{name}**, will you be my best friend forever? 🌟\n\n*{random.choice(['You are the sunshine of my life ☀️', 'You make my heart skip a beat 💓', 'My life is incomplete without you 💔'])}*"
+                buttons = [
+                    [types.KeyboardButtonCallback("💞 Yes", f"bestfrnd_yes_{uid}")],
+                    [types.KeyboardButtonCallback("💔 No", f"bestfrnd_no_{uid}")]
+                ]
+                await safe_edit(event, msg, buttons=buttons)
+            except:
+                await safe_edit(event, "❌ Failed to find user.")
+
+        @register_cmd("marriage")
+        async def cmd_marriage(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return await safe_edit(event, "❌ Please reply to someone or tag a user.")
+            uid = next(iter(targets))
+            try:
+                u = await user_bot.get_entity(uid)
+                name = u.first_name or str(uid)
+                msg = f"💍 **{name}**, will you marry me? ❤️💍\n\n*{random.choice(['I can’t imagine my life without you', 'You are my everything', 'Say yes and make me the happiest person'])}*"
+                buttons = [
+                    [types.KeyboardButtonCallback("💍 Yes", f"marriage_yes_{uid}")],
+                    [types.KeyboardButtonCallback("💔 No", f"marriage_no_{uid}")]
+                ]
+                await safe_edit(event, msg, buttons=buttons)
+            except:
+                await safe_edit(event, "❌ Failed to find user.")
+
+        @register_cmd("divorce")
+        async def cmd_divorce(event, arg):
+            targets = await get_targets(event, arg)
+            if not targets:
+                return await safe_edit(event, "❌ Please reply to someone or tag a user.")
+            uid = next(iter(targets))
+            try:
+                u = await user_bot.get_entity(uid)
+                name = u.first_name or str(uid)
+                msg = f"💔 **{name}**, I think we should get divorced... 😢\n\n*{random.choice(['It’s not you, it’s me', 'We grew apart', 'I need some space'])}*"
+                buttons = [
+                    [types.KeyboardButtonCallback("✅ Yes", f"divorce_yes_{uid}")],
+                    [types.KeyboardButtonCallback("❌ No", f"divorce_no_{uid}")]
+                ]
+                await safe_edit(event, msg, buttons=buttons)
+            except:
+                await safe_edit(event, "❌ Failed to find user.")
+
+        # ─── CALLBACK HANDLER FOR BESTFRND, MARRIAGE, DIVORCE ──────────────
+        # Note: these need to be added to the main callback_handler function.
+        # We'll update the callback_handler below.
+        
         # ─── FUN RAIDS (Menu8) ──────────────────────────────────────────────────
 
         @register_cmd("shayariraid", needs_reply=True)
