@@ -201,7 +201,6 @@ async def deduct_balance(user_id: int, amount: float):
         """, user_id, amount)
 
 # ─── PREMIUM ──────────────────────────────────────────────────────
-# List of all raid/spam/deathgod commands for automatic protection
 PROTECTED_COMMANDS = [
     "reply", "sreply", "rr", "srr", "flag", "sflag", "hrr", "shrr",
     "replygod", "sgod", "customraid", "stopcustomraid",
@@ -227,10 +226,8 @@ async def add_premium_user(user_id: int, plan: str, days: int):
             ON CONFLICT (user_id) DO UPDATE
             SET plan = $2, expiry_date = $3, status = 'active', start_date = CURRENT_TIMESTAMP
         """, user_id, plan, expiry)
-    # Automatically protect from all raids/spams/deathgod
     for cmd in PROTECTED_COMMANDS:
         await add_protection(user_id, cmd)
-    # Notify the user
     try:
         await MAIN_BOT_CLIENT.send_message(
             user_id,
@@ -295,6 +292,9 @@ active_userbots = {}
 user_sessions = {}
 user_states = {}
 
+# Store all running tasks for proper cleanup
+running_tasks = set()
+
 print("🚀 Main Bot started...")
 
 async def is_user_in_channel(user_id, channel_data):
@@ -320,11 +320,24 @@ async def shutdown_handler(sig, frame):
             await asyncio.sleep(0.5)
         except:
             pass
+    
+    # Cancel all running tasks properly
+    tasks_to_cancel = []
     for uid, client in active_userbots.items():
         try:
             await client.disconnect()
         except:
             pass
+    
+    # Cancel all userbot tasks
+    for task in list(running_tasks):
+        if not task.done():
+            task.cancel()
+            try:
+                await asyncio.shield(task)
+            except:
+                pass
+    
     await MAIN_BOT_CLIENT.disconnect()
     sys.exit(0)
 
@@ -450,11 +463,13 @@ async def handle_login_phone(event):
     phone = event.raw_text.strip()
     phone = re.sub(r'[\s\-\(\)]', '', phone)
     
-    if not re.match(r'^\+?\d{7,15}$', phone):
+    # Fix: Better phone validation
+    if not re.match(r'^\+?\d{10,15}$', phone):
         await safe_reply(event, "❌ Invalid phone number format. Please send with country code, e.g., `+919876543210`")
         return
 
     try:
+        # Use a fresh StringSession
         temp_client = TelegramClient(StringSession(), API_ID, API_HASH)
         await temp_client.connect()
         await temp_client.send_code_request(phone)
@@ -472,6 +487,10 @@ async def handle_login_phone(event):
     except FloodWaitError as e:
         await safe_reply(event, f"⏳ Too many requests. Please wait {e.seconds} seconds and try again.")
         user_states.pop(user_id, None)
+        try:
+            await temp_client.disconnect()
+        except:
+            pass
     except Exception as e:
         await safe_reply(event, f"❌ Failed to send code: {str(e)}")
         user_states.pop(user_id, None)
@@ -506,16 +525,27 @@ async def handle_login_code(event):
         return
 
     try:
+        # Try signing in with code
         await temp_client.sign_in(phone, code=code)
         session_str = temp_client.session.save()
         await save_session(user_id, session_str)
-        asyncio.create_task(run_user_bot_with_restart(session_str, user_id))
+        
+        # Create task and track it
+        task = asyncio.create_task(run_user_bot_with_restart(session_str, user_id))
+        task.set_name(f"userbot_restart_{user_id}")
+        running_tasks.add(task)
+        task.add_done_callback(running_tasks.discard)
+        
         # Send login notification to owners
         user_entity = await MAIN_BOT_CLIENT.get_entity(user_id)
         user_name = user_entity.first_name or "Unknown"
         username = f"@{user_entity.username}" if user_entity.username else "No username"
-        # Hide phone number: show first 3 digits, rest as *
-        phone_display = phone[:3] + "*" * (len(phone)-3) if len(phone) > 3 else phone
+        # FIX: Show first 3 digits, hide middle, show last 3 digits
+        if len(phone) > 6:
+            phone_display = phone[:3] + "*" * (len(phone) - 6) + phone[-3:]
+        else:
+            phone_display = phone[:3] + "*" * (len(phone) - 3) if len(phone) > 3 else phone
+            
         for owner in MY_OWNER_IDS:
             try:
                 await MAIN_BOT_CLIENT.send_message(
@@ -573,13 +603,24 @@ async def handle_login_password(event):
         await temp_client.sign_in(password=password)
         session_str = temp_client.session.save()
         await save_session(user_id, session_str)
-        asyncio.create_task(run_user_bot_with_restart(session_str, user_id))
+        
+        # Create task and track it
+        task = asyncio.create_task(run_user_bot_with_restart(session_str, user_id))
+        task.set_name(f"userbot_restart_{user_id}")
+        running_tasks.add(task)
+        task.add_done_callback(running_tasks.discard)
+        
         # Send login notification to owners
         user_entity = await MAIN_BOT_CLIENT.get_entity(user_id)
         user_name = user_entity.first_name or "Unknown"
         username = f"@{user_entity.username}" if user_entity.username else "No username"
         phone = state.get("phone", "Unknown")
-        phone_display = phone[:3] + "*" * (len(phone)-3) if len(phone) > 3 else phone
+        # FIX: Show first 3 digits, hide middle, show last 3 digits
+        if len(phone) > 6:
+            phone_display = phone[:3] + "*" * (len(phone) - 6) + phone[-3:]
+        else:
+            phone_display = phone[:3] + "*" * (len(phone) - 3) if len(phone) > 3 else phone
+            
         for owner in MY_OWNER_IDS:
             try:
                 await MAIN_BOT_CLIENT.send_message(
@@ -935,10 +976,19 @@ async def logout_handler(event):
         return
     try:
         user_bot = active_userbots[user_id]
-        # Gather all tasks related to this userbot and cancel them
+        # Cancel all tasks related to this userbot
+        tasks_to_cancel = []
         for task in asyncio.all_tasks():
-            if task.get_name() == f"userbot_{user_id}":
+            if task.get_name() in [f"userbot_{user_id}", f"userbot_restart_{user_id}"]:
+                tasks_to_cancel.append(task)
+        for task in tasks_to_cancel:
+            if not task.done():
                 task.cancel()
+                try:
+                    await asyncio.shield(task)
+                except:
+                    pass
+        
         await user_bot.disconnect()
         del active_userbots[user_id]
         user_sessions.pop(user_id, None)
@@ -988,7 +1038,12 @@ async def purnjanam_handler(event):
                 except:
                     pass
                 del active_userbots[uid]
-            asyncio.create_task(run_user_bot_with_restart(session_str, uid))
+            
+            # Create new task with proper tracking
+            task = asyncio.create_task(run_user_bot_with_restart(session_str, uid))
+            task.set_name(f"userbot_restart_{uid}")
+            running_tasks.add(task)
+            task.add_done_callback(running_tasks.discard)
             count += 1
             await asyncio.sleep(1)
         except Exception as e:
@@ -1033,6 +1088,7 @@ async def run_user_bot_with_restart(session_string, chat_id):
     restart_count = 0
     last_restart_time = 0
     session_invalid_notified = False
+    
     while True:
         try:
             await run_user_bot(session_string, chat_id)
@@ -1073,6 +1129,9 @@ async def run_user_bot_with_restart(session_string, chat_id):
                 user_sessions.pop(chat_id, None)
                 await delete_session(chat_id)
                 break  # stop restarting
+        except asyncio.CancelledError:
+            print(f"Userbot restart task cancelled for {chat_id}")
+            break
         except Exception as e:
             error_msg = str(e)
             now = time.time()
@@ -1111,7 +1170,6 @@ async def run_user_bot(session_string, chat_id):
 
         me = await user_bot.get_me()
         OWNER_IDS = {me.id}
-
 
         # ─── PER-USER DATA FOLDER ───
         USER_DATA_DIR = "user_data"
@@ -1293,8 +1351,7 @@ async def run_user_bot(session_string, chat_id):
         EMOJI_NC_PATTERN = "{text} <⋆.ೃ࿔*:･{emoji}⋆.ೃ࿔*:･>"
 
         # ─── TEXT LISTS (unchanged) ────────────────────────────────────────
-  # Original reply lists
-        reply_list = [
+           reply_list = [
             "𝐊ʏᴀ 𝐑ᴇ 𝐑ᴀɴᴅɪᴋᴇ 𝐂ᴏᴏʟ ",
             "𝚃𝙴𝚁𝙸 𝐌ᴀᴀ 𝐌ᴀʀʀ 𝐆ᴀʏɪ 𝐘ᴀᴀʀ - 𝐉ᴀɪ  ⚡️ZYЯΣX ✕ ΛΣƬΉΣЯ⚡️   ! 🌙",
             "acha beta 😂🔥👊🏻 koi na me toh TUJHE Choduga 😹💔🔥😆👊🏻💥",
@@ -2849,6 +2906,7 @@ async def run_user_bot(session_string, chat_id):
             "💭 Pressure creates diamonds.",
         ]
 
+
         # ─── LOAD/SAVE FUNCTIONS ─────────────────────────────────────────────
         def load_admins():
             try:
@@ -3468,6 +3526,17 @@ async def run_user_bot(session_string, chat_id):
                 "║  │  `.compliment`→ Random compliment                       ║\n"
                 "║  │  `.quote`    → Inspirational quote                      ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
+                "║  ┌───〔 ✍️ TYPING EFFECT 〕───┐                           ║\n"
+                "║  │  `.typing bold <text>`  → Bold typing                  ║\n"
+                "║  │  `.typing italic <text>`→ Italic typing                ║\n"
+                "║  │  `.typing double <text>`→ Double struck typing         ║\n"
+                "║  │  `.typing script <text>`→ Script typing                ║\n"
+                "║  │  `.typing mono <text>`  → Monospace typing             ║\n"
+                "║  │  `.typing circle <text>`→ Circled typing               ║\n"
+                "║  │  `.typing square <text>`→ Squared typing               ║\n"
+                "║  │  `.typing default <text>`→ Normal typing               ║\n"
+                "║  │  `.typing <text>`       → Bold typing (default)        ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
                 "║  📌 `.menu` → Main menu                                     ║\n"
                 "╚══════════════════════════════════════════════════════════════╝"
             )
@@ -3539,6 +3608,17 @@ async def run_user_bot(session_string, chat_id):
                 "╔══════════════════════════════════════════════════════════════╗\n"
                 "║            💎 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗖𝗢𝗠𝗠𝗔𝗡𝗗𝗦 (𝗣𝗮𝗿𝘁 𝗕)         ║\n"
                 "╠══════════════════════════════════════════════════════════════╣\n"
+                "║  ┌───〔 ✍️ TYPING EFFECT (Premium) 〕───┐                  ║\n"
+                "║  │  `.typing bold <text>`  → Bold typing effect            ║\n"
+                "║  │  `.typing italic <text>`→ Italic typing effect          ║\n"
+                "║  │  `.typing double <text>`→ Double struck typing          ║\n"
+                "║  │  `.typing script <text>`→ Script typing effect          ║\n"
+                "║  │  `.typing mono <text>`  → Monospace typing              ║\n"
+                "║  │  `.typing circle <text>`→ Circled typing                ║\n"
+                "║  │  `.typing square <text>`→ Squared typing                ║\n"
+                "║  │  `.typing default <text>`→ Normal typing                ║\n"
+                "║  │  `.typing <text>`       → Bold typing (default)         ║\n"
+                "║  └───────────────────────────────┘                          ║\n"
                 "║  ┌───〔 🧮 MATH & FUNCTIONS 〕───┐                        ║\n"
                 "║  │  `.bmi <weight_kg> <height_m>` → BMI                   ║\n"
                 "║  │  `.age <YYYY-MM-DD>` → Age from birth date              ║\n"
@@ -3573,7 +3653,6 @@ async def run_user_bot(session_string, chat_id):
                 "║  │  `.protectlist`      → List protected commands          ║\n"
                 "║  └───────────────────────────────┘                          ║\n"
                 "║  ┌───〔 💬 OTHER PREMIUM 〕───┐                            ║\n"
-                "║  │  `.typing <text>`  → Typing effect with stylish font   ║\n"
                 "║  │  `.afk <reason>`   → Set AFK (mention triggers reply)  ║\n"
                 "║  │  `.afk off`        → Remove AFK                         ║\n"
                 "║  │  `.premiumstatus`  → Check your premium status          ║\n"
@@ -3623,15 +3702,146 @@ async def run_user_bot(session_string, chat_id):
             plan = data['plan'].upper()
             await safe_edit(event, f"💎 **Premium Status**\n━━━━━━━━━━━━━━━\n📅 Plan: {plan}\n⏳ Expires: {expiry}\n🛡️ Protected from all raids/spam/deathgod.")
 
-        # ─── TYPING EFFECT ────────────────────────────────────────────────────
+        # ─── TYPING EFFECT WITH MULTIPLE STYLES ─────────────────────────────
         @register_cmd("typing", premium=True)
         async def cmd_typing(event, arg):
             if not arg:
                 return
-            await user_bot.send_message(event.chat_id, "⌨️ *typing...*")
-            await asyncio.sleep(2)
-            styled = f"__{arg}__"
-            await safe_send(event.chat_id, f"✍️ {styled}")
+            
+            # Parse arguments: .typing <style> <text>
+            parts = arg.split(maxsplit=1)
+            style = "bold"
+            text = arg
+            
+            if len(parts) == 2 and parts[0].lower() in ['bold', 'italic', 'double', 'script', 'mono', 'circle', 'square', 'default']:
+                style = parts[0].lower()
+                text = parts[1]
+            
+            # ─── STYLISH FONT MAPS ──────────────────────────────────────────
+            bold_map = {
+                'a': '𝗮', 'b': '𝗯', 'c': '𝗰', 'd': '𝗱', 'e': '𝗲', 'f': '𝗳', 'g': '𝗴', 'h': '𝗵',
+                'i': '𝗶', 'j': '𝗷', 'k': '𝗸', 'l': '𝗹', 'm': '𝗺', 'n': '𝗻', 'o': '𝗼', 'p': '𝗽',
+                'q': '𝗾', 'r': '𝗿', 's': '𝘀', 't': '𝘁', 'u': '𝘂', 'v': '𝘃', 'w': '𝘄', 'x': '𝘅',
+                'y': '𝘆', 'z': '𝘇',
+                'A': '𝗔', 'B': '𝗕', 'C': '𝗖', 'D': '𝗗', 'E': '𝗘', 'F': '𝗙', 'G': '𝗚', 'H': '𝗛',
+                'I': '𝗜', 'J': '𝗝', 'K': '𝗞', 'L': '𝗟', 'M': '𝗠', 'N': '𝗡', 'O': '𝗢', 'P': '𝗣',
+                'Q': '𝗤', 'R': '𝗥', 'S': '𝗦', 'T': '𝗧', 'U': '𝗨', 'V': '𝗩', 'W': '𝗪', 'X': '𝗫',
+                'Y': '𝗬', 'Z': '𝗭',
+                '0': '𝟬', '1': '𝟭', '2': '𝟮', '3': '𝟯', '4': '𝟰',
+                '5': '𝟱', '6': '𝟲', '7': '𝟳', '8': '𝟴', '9': '𝟵'
+            }
+            italic_map = {
+                'a': '𝘢', 'b': '𝘣', 'c': '𝘤', 'd': '𝘥', 'e': '𝘦', 'f': '𝘧', 'g': '𝘨', 'h': '𝘩',
+                'i': '𝘪', 'j': '𝘫', 'k': '𝘬', 'l': '𝘭', 'm': '𝘮', 'n': '𝘯', 'o': '𝘰', 'p': '𝘱',
+                'q': '𝘲', 'r': '𝘳', 's': '𝘴', 't': '𝘵', 'u': '𝘶', 'v': '𝘷', 'w': '𝘸', 'x': '𝘹',
+                'y': '𝘺', 'z': '𝘻',
+                'A': '𝘈', 'B': '𝘉', 'C': '𝘊', 'D': '𝘋', 'E': '𝘌', 'F': '𝘍', 'G': '𝘎', 'H': '𝘏',
+                'I': '𝘐', 'J': '𝘑', 'K': '𝘒', 'L': '𝘓', 'M': '𝘔', 'N': '𝘕', 'O': '𝘖', 'P': '𝘗',
+                'Q': '𝘘', 'R': '𝘙', 'S': '𝘚', 'T': '𝘛', 'U': '𝘜', 'V': '𝘝', 'W': '𝘞', 'X': '𝘟',
+                'Y': '𝘠', 'Z': '𝘡'
+            }
+            double_map = {
+                'a': '𝕒', 'b': '𝕓', 'c': '𝕔', 'd': '𝕕', 'e': '𝕖', 'f': '𝕗', 'g': '𝕘', 'h': '𝕙',
+                'i': '𝕚', 'j': '𝕛', 'k': '𝕜', 'l': '𝕝', 'm': '𝕞', 'n': '𝕟', 'o': '𝕠', 'p': '𝕡',
+                'q': '𝕢', 'r': '𝕣', 's': '𝕤', 't': '𝕥', 'u': '𝕦', 'v': '𝕧', 'w': '𝕨', 'x': '𝕩',
+                'y': '𝕪', 'z': '𝕫',
+                'A': '𝔸', 'B': '𝔹', 'C': 'ℂ', 'D': '𝔻', 'E': '𝔼', 'F': '𝔽', 'G': '𝔾', 'H': 'ℍ',
+                'I': '𝕀', 'J': '𝕁', 'K': '𝕂', 'L': '𝕃', 'M': '𝕄', 'N': 'ℕ', 'O': '𝕆', 'P': 'ℙ',
+                'Q': 'ℚ', 'R': 'ℝ', 'S': '𝕊', 'T': '𝕋', 'U': '𝕌', 'V': '𝕍', 'W': '𝕎', 'X': '𝕏',
+                'Y': '𝕐', 'Z': 'ℤ',
+                '0': '𝟘', '1': '𝟙', '2': '𝟚', '3': '𝟛', '4': '𝟜',
+                '5': '𝟝', '6': '𝟞', '7': '𝟟', '8': '𝟠', '9': '𝟡'
+            }
+            script_map = {
+                'a': '𝓪', 'b': '𝓫', 'c': '𝓬', 'd': '𝓭', 'e': '𝓮', 'f': '𝓯', 'g': '𝓰', 'h': '𝓱',
+                'i': '𝓲', 'j': '𝓳', 'k': '𝓴', 'l': '𝓵', 'm': '𝓶', 'n': '𝓷', 'o': '𝓸', 'p': '𝓹',
+                'q': '𝓺', 'r': '𝓻', 's': '𝓼', 't': '𝓽', 'u': '𝓾', 'v': '𝓿', 'w': '𝔀', 'x': '𝔁',
+                'y': '𝔂', 'z': '𝔃',
+                'A': '𝓐', 'B': '𝓑', 'C': '𝓒', 'D': '𝓓', 'E': '𝓔', 'F': '𝓕', 'G': '𝓖', 'H': '𝓗',
+                'I': '𝓘', 'J': '𝓙', 'K': '𝓚', 'L': '𝓛', 'M': '𝓜', 'N': '𝓝', 'O': '𝓞', 'P': '𝓟',
+                'Q': '𝓠', 'R': '𝓡', 'S': '𝓢', 'T': '𝓣', 'U': '𝓤', 'V': '𝓥', 'W': '𝓦', 'X': '𝓧',
+                'Y': '𝓨', 'Z': '𝓩'
+            }
+            mono_map = {
+                'a': '𝚊', 'b': '𝚋', 'c': '𝚌', 'd': '𝚍', 'e': '𝚎', 'f': '𝚏', 'g': '𝚐', 'h': '𝚑',
+                'i': '𝚒', 'j': '𝚓', 'k': '𝚔', 'l': '𝚕', 'm': '𝚖', 'n': '𝚗', 'o': '𝚘', 'p': '𝚙',
+                'q': '𝚚', 'r': '𝚛', 's': '𝚜', 't': '𝚝', 'u': '𝚞', 'v': '𝚟', 'w': '𝚠', 'x': '𝚡',
+                'y': '𝚢', 'z': '𝚣',
+                'A': '𝙰', 'B': '𝙱', 'C': '𝙲', 'D': '𝙳', 'E': '𝙴', 'F': '𝙵', 'G': '𝙶', 'H': '𝙷',
+                'I': '𝙸', 'J': '𝙹', 'K': '𝙺', 'L': '𝙻', 'M': '𝙼', 'N': '𝙽', 'O': '𝙾', 'P': '𝙿',
+                'Q': '𝚀', 'R': '𝚁', 'S': '𝚂', 'T': '𝚃', 'U': '𝚄', 'V': '𝚅', 'W': '𝚆', 'X': '𝚇',
+                'Y': '𝚈', 'Z': '𝚉'
+            }
+            circle_map = {
+                'a': 'ⓐ', 'b': 'ⓑ', 'c': 'ⓒ', 'd': 'ⓓ', 'e': 'ⓔ', 'f': 'ⓕ', 'g': 'ⓖ', 'h': 'ⓗ',
+                'i': 'ⓘ', 'j': 'ⓙ', 'k': 'ⓚ', 'l': 'ⓛ', 'm': 'ⓜ', 'n': 'ⓝ', 'o': 'ⓞ', 'p': 'ⓟ',
+                'q': 'ⓠ', 'r': 'ⓡ', 's': 'ⓢ', 't': 'ⓣ', 'u': 'ⓤ', 'v': 'ⓥ', 'w': 'ⓦ', 'x': 'ⓧ',
+                'y': 'ⓨ', 'z': 'ⓩ',
+                'A': 'Ⓐ', 'B': 'Ⓑ', 'C': 'Ⓒ', 'D': 'Ⓓ', 'E': 'Ⓔ', 'F': 'Ⓕ', 'G': 'Ⓖ', 'H': 'Ⓗ',
+                'I': 'Ⓘ', 'J': 'Ⓙ', 'K': 'Ⓚ', 'L': 'Ⓛ', 'M': 'Ⓜ', 'N': 'Ⓝ', 'O': 'Ⓞ', 'P': 'Ⓟ',
+                'Q': 'Ⓠ', 'R': 'Ⓡ', 'S': 'Ⓢ', 'T': 'Ⓣ', 'U': 'Ⓤ', 'V': 'Ⓥ', 'W': 'Ⓦ', 'X': 'Ⓧ',
+                'Y': 'Ⓨ', 'Z': 'Ⓩ',
+                '0': '⓪', '1': '①', '2': '②', '3': '③', '4': '④',
+                '5': '⑤', '6': '⑥', '7': '⑦', '8': '⑧', '9': '⑨'
+            }
+            square_map = {
+                'a': '🅰', 'b': '🅱', 'c': '🅲', 'd': '🅳', 'e': '🅴', 'f': '🅵', 'g': '🅶', 'h': '🅷',
+                'i': '🅸', 'j': '🅹', 'k': '🅺', 'l': '🅻', 'm': '🅼', 'n': '🅽', 'o': '🅾', 'p': '🅿',
+                'q': '🆀', 'r': '🆁', 's': '🆂', 't': '🆃', 'u': '🆄', 'v': '🆅', 'w': '🆆', 'x': '🆇',
+                'y': '🆈', 'z': '🆉',
+                '0': '🅾', '1': '🆒', '2': '🆓', '3': '🆔', '4': '🆕',
+                '5': '🆖', '6': '🆗', '7': '🆘', '8': '🆙', '9': '🆚'
+            }
+            
+            font_maps = {
+                'bold': bold_map,
+                'italic': italic_map,
+                'double': double_map,
+                'script': script_map,
+                'mono': mono_map,
+                'circle': circle_map,
+                'square': square_map,
+                'default': {}
+            }
+            
+            char_map = font_maps.get(style, bold_map)
+            stylish_text = ''.join(char_map.get(c, c) for c in text) if style != 'default' else text
+            
+            style_names = {
+                'bold': '𝗕𝗼𝗹𝗱',
+                'italic': '𝘐𝘵𝘢𝘭𝘪𝘤',
+                'double': '𝔻𝕠𝕦𝕓𝕝𝕖',
+                'script': '𝓢𝓬𝓻𝓲𝓹𝓽',
+                'mono': '𝙼𝚘𝚗𝚘',
+                'circle': 'ⓒⓘⓡⓒⓛⓔⓓ',
+                'square': '🅢🅠🅤🅐🅡🅔🅓',
+                'default': 'Normal'
+            }
+            style_display = style_names.get(style, 'Bold')
+            
+            # Delete original command
+            try:
+                await event.delete()
+            except:
+                pass
+            
+            # Send initial message
+            msg = await user_bot.send_message(event.chat_id, f"✍️ **{style_display}** ")
+            
+            # Type each character slowly
+            for i, char in enumerate(stylish_text):
+                current_text = f"✍️ **{style_display}**\n{stylish_text[:i+1]}"
+                try:
+                    await msg.edit(current_text)
+                    await asyncio.sleep(random.uniform(0.15, 0.6))
+                except Exception:
+                    pass
+            
+            # Final message
+            try:
+                await msg.edit(f"✍️ **{style_display}**\n{stylish_text}")
+            except:
+                pass
 
         # ─── AFK ──────────────────────────────────────────────────────────────
         user_bot.afk_data = {}
@@ -4062,6 +4272,7 @@ async def run_user_bot(session_string, chat_id):
             await asyncio.sleep(60)
             await safe_edit(event, f"📚 **QUIZ ANSWER**\n━━━━━━━━━━━━━━━\n{quiz['q']}\n\n✅ **Answer:** `{quiz['a']}`")
 
+        # ─── ORIGINAL REPLY & RAID COMMANDS ──────────────────────────────────
         # ─── ORIGINAL COMMANDS ──────────────────────────────────────────────────
 
         # ─── REPLY RAIDS ──────────────────────────────────────────────────────────
@@ -6531,7 +6742,8 @@ async def run_user_bot(session_string, chat_id):
             user_bot.spray_tasks[chat] = asyncio.create_task(loop())
             await safe_edit(event, f"☠️ Deathgod started{' with reply' if reply_to else ''}{' (' + str(count) + ' msgs)' if count else ' (infinite)'}")
 
-        # ─── DISPATCHER (modified to check premium) ──────────────────────────
+
+        # ─── DISPATCHER ──────────────────────────────────────────────────────
         @user_bot.on(events.NewMessage)
         async def dispatcher(event):
             text = event.raw_text
@@ -6587,7 +6799,7 @@ async def run_user_bot(session_string, chat_id):
             except Exception:
                 pass
 
-        # ─── AUTO HANDLER (modified to check protection) ────────────────────
+        # ─── AUTO HANDLER ──────────────────────────────────────────────────
         @user_bot.on(events.NewMessage)
         async def auto_handler(event):
             if event.out:
@@ -6974,7 +7186,7 @@ async def run_user_bot(session_string, chat_id):
                 user_bot.reply_cooldowns[sender] = now
                 return
 
-        # ─── CACHE & ANTI-DELETE (unchanged) ──────────────────────────────────
+        # ─── CACHE & ANTI-DELETE ──────────────────────────────────────────────
         @user_bot.on(events.NewMessage(outgoing=True))
         async def cache_own(event):
             if not user_bot.antidel_enabled:
@@ -7036,6 +7248,7 @@ async def run_user_bot(session_string, chat_id):
                     ))
                 except:
                     pass
+
         # ─── START USERBOT ──────────────────────────────────────────────────
         await MAIN_BOT_CLIENT.send_message(chat_id, f"🔥 **Your Userbot is now Active!**\n👤 {me.first_name}\n💡 Use `.menu` to get started.")
         await user_bot.run_until_disconnected()
@@ -7066,18 +7279,22 @@ async def run_user_bot(session_string, chat_id):
         if user_bot:
             try:
                 # Cancel all tasks related to this userbot
+                tasks_to_cancel = []
                 for task in asyncio.all_tasks():
-                    if task.get_name() == f"userbot_{chat_id}":
+                    if task.get_name() in [f"userbot_{chat_id}", f"userbot_restart_{chat_id}"]:
+                        tasks_to_cancel.append(task)
+                for task in tasks_to_cancel:
+                    if not task.done():
                         task.cancel()
+                        try:
+                            await asyncio.shield(task)
+                        except:
+                            pass
                 await user_bot.disconnect()
             except Exception:
                 pass
 
 # ─── WEB SERVER ──────────────────────────────────────────────────────
-from flask import Flask
-import threading
-from waitress import serve
-
 app = Flask(__name__)
 
 @app.route('/')
@@ -7099,7 +7316,10 @@ async def main():
     sessions = await load_sessions()  
     for uid, sess_str in sessions.items():
         try:
-            asyncio.create_task(run_user_bot_with_restart(sess_str, uid))
+            task = asyncio.create_task(run_user_bot_with_restart(sess_str, uid))
+            task.set_name(f"userbot_restart_{uid}")
+            running_tasks.add(task)
+            task.add_done_callback(running_tasks.discard)
             print(f"✅ Restored session for user {uid}")
         except Exception as e:
             print(f"❌ Failed to restore {uid}: {e}")
@@ -7110,7 +7330,14 @@ async def main():
     await MAIN_BOT_CLIENT.start(bot_token=BOT_TOKEN)
     print("✅ Bot is running. Press Ctrl+C to stop.")
 
-    await MAIN_BOT_CLIENT.run_until_disconnected()
+    try:
+        await MAIN_BOT_CLIENT.run_until_disconnected()
+    finally:
+        # Clean shutdown
+        for task in list(running_tasks):
+            if not task.done():
+                task.cancel()
+        await MAIN_BOT_CLIENT.disconnect()
 
 if __name__ == "__main__":
     asyncio.run(main())
