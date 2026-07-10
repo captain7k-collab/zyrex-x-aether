@@ -1208,6 +1208,41 @@ async def run_user_bot_with_restart(session_string, chat_id):
         except Exception as e:
             error_msg = str(e)
             now = time.time()
+            
+            # ─── SPECIAL CHECK FOR EOF OR INTERACTIVE INPUT ERROR ───
+            if "EOF" in error_msg or "input" in error_msg.lower() or "interactive" in error_msg.lower():
+                print(f"🚫 Session invalid (EOF/interactive) for user {chat_id}. Stopping restarts.")
+                try:
+                    # User को बोलो दोबारा Login करे
+                    await MAIN_BOT_CLIENT.send_message(
+                        chat_id,
+                        "⚠️ **Your userbot session has expired or become invalid!**\n\n"
+                        "Please login again using `/login` in the main bot.\n"
+                        "🛑 This userbot will now stop automatically restarting."
+                    )
+                    # Owners को भी बताओ
+                    for owner in MY_OWNER_IDS:
+                        await MAIN_BOT_CLIENT.send_message(
+                            owner,
+                            f"🚫 **Userbot Session Invalid (EOF/Interactive)**\n"
+                            f"👤 User: {chat_id}\n"
+                            f"📌 Reason: {error_msg[:100]}\n"
+                            f"✅ Restart loop stopped for this user."
+                        )
+                except:
+                    pass
+                # Session को Database से हटाओ
+                try:
+                    if chat_id in active_userbots:
+                        await active_userbots[chat_id].disconnect()
+                        del active_userbots[chat_id]
+                except:
+                    pass
+                user_sessions.pop(chat_id, None)
+                await delete_session(chat_id)
+                break  # ⬅️ Restart Loop रोकने के लिए
+            
+            # ─── NORMAL RESTART LOGIC (बाकी Errors के लिए) ───
             if restart_count >= 5 and (now - last_restart_time) < 60:
                 print(f"⚠️ Too many restarts for user {chat_id} in short time. Waiting...")
                 try:
