@@ -5663,7 +5663,207 @@ async def run_user_bot(session_string, chat_id):
                     stop_loader.set(); loader_task.cancel()
                     await safe_edit(event, f"❌ DMusic error: {e}")
             asyncio.create_task(download_music())
-              # ─── FUN METERS (Menu7) ──────────────────────────────────────────────
+                   # ─── FUN METERS (Menu7) ──────────────────────────────────────────────
+
+        # Helper function for funny lines (10 lines per meter, alternating Hindi/English/Hinglish)
+        def get_funny_line(meter_type, percent):
+            lines = {
+                'stud': [
+                    "तू तो ग्रुप का अल्फा है! 🐺 (Alpha of the group!)",
+                    "Absolute chad energy! You're the alpha! 💪",
+                    "बहुत स्टड है तू – सबको NPC bana de! 😎",
+                    "तेरी स्टडनेस ने छत पार कर दी! 📈",
+                    "You're basically a walking sigma, bro! 🌟",
+                    "Tera stud level off the charts hai! 💯",
+                    "तू ही हीरो है इस कहानी का! 🦸",
+                    "You make other guys look like sidekicks! 😤",
+                    "Pure chad vibes – koi match nahi kar sakta! 💥",
+                    "तेरे आगे सब फीके हैं! 👑"
+                ],
+                'looks': [
+                    "तू तो मॉडल बन सकता/सकती है! 📸",
+                    "Even the sun is jealous of your glow! ☀️",
+                    "Tera chehra dekh ke mirror bhi sharma jaye! 🪞",
+                    "लग रहा है स्नैक – खाने का मन करता है! 🍕",
+                    "You've got that Greek god/goddess face! 🏛️",
+                    "Itna gorgeous ki Instagram crash ho jaye! 📱",
+                    "तेरी खूबसूरती का कोई मुकाबला नहीं! ✨",
+                    "Looking like a million bucks! 💰",
+                    "Tere glow se suraj bhi jal gaya! ☀️",
+                    "तू तो चेहरा है, बाकी सब पृष्ठभूमि! 🖼️"
+                ],
+                'gay': [
+                    "इंद्रधनुष तेरे लिए लहरा रहा! 🌈",
+                    "You're the life of the Pride parade! 🎉",
+                    "Itna gay ki unicorn ko bhi insecurity ho jaye! 🦄",
+                    "तू गेयों की रानी है! 👑",
+                    "Fabulous level: legendary! 💅",
+                    "Teri gayness ne rainbow ko bhi piche chhod diya! 🌈",
+                    "तू तो गे प्राइड का मुख्य आकर्षण है! 🏳️‍🌈",
+                    "You're so gay you make glitter jealous! ✨",
+                    "Itna gay ki straight log bhi confused ho jayein! 🤔",
+                    "तू ही इंद्रधनुष का दूसरा नाम है! 🌈"
+                ],
+                'lesbian': [
+                    "तू wlw दुनिया की रानी है! 👑",
+                    "You make sapphic hearts flutter! 💕",
+                    "Itni lesbian ki rainbow bhi sharm jaye! 🌈",
+                    "तू प्राइड का कारण है! 🏳️‍🌈",
+                    "You're the ultimate goddess of love! 💖",
+                    "Teri lesbian vibe ne sabko impress kar diya! 😍",
+                    "तू तो लेस्बियन क्वीन है! 👑",
+                    "You're so lesbian you make the moon blush! 🌙",
+                    "Itni sapphic ki Dilwale Dulhania bhi fade ho jaye! 🎬",
+                    "तू ही सबकी सपनों की रानी है! 💭"
+                ],
+                'straight': [
+                    "तू तो रूलर की तरह सीधा/सीधी है! 📏",
+                    "You're the definition of vanilla! 🍦",
+                    "Itna straight ki line bhi curve ho jaye! 😂",
+                    "तू हेट्रोनॉर्मेटिविटी का पोस्टर चाइल्ड है! 📸",
+                    "You're as straight as your hair after a blowout! 💇",
+                    "Tera straightness sabko surprise kar deta hai! 😮",
+                    "तू तो सीधा रास्ता है, मोड़ नहीं! 🛤️",
+                    "You're the most straight person ever! 🏳️",
+                    "Itna straight ki compass bhi confuse ho jaye! 🧭",
+                    "तू ही सीधेपन की मिसाल है! 🏆"
+                ],
+                'bi': [
+                    "तू दोनों दुनिया का सबसे अच्छा है! 🌈",
+                    "You're like a bicycle – you go both ways! 🚲",
+                    "Teri bi-ness ne sabko confuse kar diya! 😵",
+                    "तू बाई-कॉनिक की परिभाषा है! 💖💜💙",
+                    "You're so bi you make the colors jealous! 🎨",
+                    "Itna bi ki rainbow bhi piche reh gaya! 🌈",
+                    "तू बाई सोसाइटी की रानी है! 👑",
+                    "You're the best of both worlds, literally! 🌍",
+                    "Tera bi span sabko cover kar leta hai! 🤗",
+                    "तू ही दोनों तरफ की चाबी है! 🔑"
+                ],
+                'trans': [
+                    "तू एक खूबसूरत तितली है! 🦋",
+                    "You're the reason gender is a construct! 🏳️‍⚧️",
+                    "Itni trans ki flag ko bhi garv ho! 🏳️‍⚧️",
+                    "तू खुद होने का अवतार है! 💫",
+                    "You're a true trailblazer! 🚀",
+                    "Teri trans journey ne sabko inspire kar diya! ✨",
+                    "तू तो बदलाव की मिसाल है! 🌟",
+                    "You're so trans you make the stars align! 🌌",
+                    "Itna trans ki duniya badal do! 🌍",
+                    "तू ही सच्ची पहचान है! 💖"
+                ],
+                'simp': [
+                    "तू दीवार पर भी सिंप करेगा/करेगी! 🧱",
+                    "You'd send money to your own shadow! 💸",
+                    "Itna simp ki crush ka bathwater bhi kharid lo! 🛁",
+                    "तू सिंपों का राजा/रानी है! 👑",
+                    "You're the reason 'simp' is in the dictionary! 📖",
+                    "Teri simping ne sabko hila kar rakha! 😂",
+                    "तू तो सिम्पनेस का पर्याय है! 🏆",
+                    "You'd simp for a rock if it smiled! 🪨",
+                    "Itna simp ki girlfriend bhi bolde 'chill'! 😅",
+                    "तू ही सिम्पों का गुरु है! 🙏"
+                ],
+                'chad': [
+                    "तू अल्टीमेट चाड है! 🗿",
+                    "You make other men insecure! 😤",
+                    "Teri chadness ne sabko pichhe chhod diya! 🏃",
+                    "तू इस दुनिया का प्रोटागोनिस्ट है! 🌍",
+                    "You flex with just your pinky! 💪",
+                    "Itna chad ki sigma bhi respect kare! 🐺",
+                    "तू ही चाडों का चाड है! 👑",
+                    "You're the main character, everyone else is an extra! 🎬",
+                    "Teri vibe se duniya hil jati hai! 🌪️",
+                    "तू तो अल्फा का भी अल्फा है! 🐺"
+                ],
+                'friendly': [
+                    "तू सबकी ज़िंदगी की धूप है! ☀️",
+                    "You make friends everywhere you go! 🤝",
+                    "Itna friendly ki dushman bhi dost ban jaye! 😊",
+                    "तू गोल्डन रिट्रीवर का इंसानी रूप है! 🐕",
+                    "You're the reason people believe in kindness! 💖",
+                    "Teri friendliness ne sabko impress kar diya! 🥰",
+                    "तू तो मिलनसार का अवतार है! 🌟",
+                    "You're so friendly even the sun is jealous! ☀️",
+                    "Itna friendly ki log tujhse hi motivate ho! 💪",
+                    "तू ही सबकी पसंद है! 💕"
+                ],
+                'rizz': [
+                    "तेरी रिज़ ने सबका दिल चुरा लिया! 😏",
+                    "You have the rizz of a thousand pickup lines! 📞",
+                    "Tera rizz itna smooth ki makkhan bhi sharm jaye! 🧈",
+                    "तू रिज़ मास्टर है – कोई नहीं रुक सकता! 🧲",
+                    "You're the rizz of the century! 🌟",
+                    "Itni rizz ki log tujhse hi pyaar kar bethe! 😍",
+                    "तेरी रिज़ ने सारे नियम तोड़ दिए! 📜",
+                    "Your rizz makes everyone weak in the knees! 🦵",
+                    "Tera rizz level next level hai! 🚀",
+                    "तू ही रिज़ का बादशाह/मलिका है! 👑"
+                ],
+                'iq': [
+                    "तू सर्टिफाइड जीनियस है! 🧠",
+                    "Your IQ is higher than room temperature! 🌡️",
+                    "Itna smart ki Einstein bhi feel kare average! 🤓",
+                    "तू इस ऑपरेशन का दिमाग है! 💡",
+                    "You're the definition of intellect! 📚",
+                    "Teri IQ ne sabko chakkar mein daal diya! 😵",
+                    "तू तो बुद्धिमानों का बुद्धिमान है! 🏆",
+                    "You're so smart you make computers jealous! 💻",
+                    "Itna genius ki Google bhi tujhse puchhe! 🔍",
+                    "तू ही ज्ञान का सागर है! 🌊"
+                ],
+                'stupid': [
+                    "तू इतना बेवकूफ है कि मेंढक को ब्लेंडर में डाल दे! 🐸",
+                    "You're the reason instructions exist! 📋",
+                    "Itna dumb ki machhli ko tairna sikhaye! 🐟",
+                    "तू 'होल्ड माय बियर' का अवतार है! 🍺",
+                    "You make a rock look smart! 🪨",
+                    "Teri stupidity ne sabko hansa diya! 😂",
+                    "तू तो बेवकूफी का प्रतीक है! 🏆",
+                    "You'd try to charge your phone in the microwave! 📱",
+                    "Itna stupid ki khud ko hi confuse kar le! 🤔",
+                    "तू ही मूर्खों के राजा है! 👑"
+                ],
+                'sigma': [
+                    "तू अकेला भेड़िया है – सच्चा सिग्मा! 🐺",
+                    "You don't follow rules, you make them! 👑",
+                    "Teri sigma vibe ne sabko silent kar diya! 🤐",
+                    "तू पैक का सिग्मा है! 🐾",
+                    "You're the definition of independent! 🌟",
+                    "Itna sigma ki validation ki zaroorat nahi! 💪",
+                    "तू ही सिग्माओं का सिग्मा है! 🐺",
+                    "You're the lone wolf that leads the pack! 🐾",
+                    "Teri sigma energy ne sabko impress kar diya! 🔥",
+                    "तू ही अपनी दुनिया का राजा है! 🌍"
+                ],
+                'pookie': [
+                    "तू सबसे क्यूट पूकी है! 🧸",
+                    "You're so pookie you make teddy bears jealous! 🐻",
+                    "Itna pookie ki marshmallow bhi sharm jaye! ☁️",
+                    "तू ग्रुप का पूकी है! 💕",
+                    "You're the ultimate pookie bear! 🧸",
+                    "Teri pookie-ness ne sabko pighla diya! 🫠",
+                    "तू तो पूकी का पर्याय है! 🏆",
+                    "You're so pookie you make hearts melt! 💖",
+                    "Itna pookie ki log tujhe gale laga le! 🤗",
+                    "तू ही प्यार का पुतला है! 💞"
+                ],
+                'baddie': [
+                    "तू टोटल बैडी है – स्ले! 💅",
+                    "You're so baddie you make everyone else look basic! 🔥",
+                    "Teri baddie energy ne sabko hila diya! 💃",
+                    "तू फियरलेस की परिभाषा है! 🦁",
+                    "You're the baddie that runs the world! 🌍",
+                    "Itni baddie ki shaitan bhi sharm jaye! 😈",
+                    "तू तो बैडियों की रानी है! 👑",
+                    "You're so baddie you make the devil blush! 😈",
+                    "Tera baddie level next level hai! 🚀",
+                    "तू ही सबकी सपनों की बैडी है! 💖"
+                ]
+            }
+            if meter_type in lines:
+                return random.choice(lines[meter_type])
+            return "तू कमाल है! 🌟 (You're amazing!)"
 
         @register_cmd("studmeter")
         async def cmd_studmeter(event, arg):
@@ -5675,7 +5875,8 @@ async def run_user_bot(session_string, chat_id):
                     u = await user_bot.get_entity(uid)
                     name = u.first_name or str(uid)
                     percent = random.randint(0, 100)
-                    await event.reply(f"📊 **Stud Meter**\n{name} is **{percent}%** Stud! 💪😎")
+                    line = get_funny_line('stud', percent)
+                    await event.reply(f"📊 **Stud Meter**\n{name} is **{percent}%** Stud!\n\n{line}")
                 except:
                     pass
 
@@ -5689,7 +5890,8 @@ async def run_user_bot(session_string, chat_id):
                     u = await user_bot.get_entity(uid)
                     name = u.first_name or str(uid)
                     percent = random.randint(0, 100)
-                    await event.reply(f"📊 **Looks Meter**\n{name} is **{percent}%** Good-looking! 😍✨")
+                    line = get_funny_line('looks', percent)
+                    await event.reply(f"📊 **Looks Meter**\n{name} is **{percent}%** Good-looking!\n\n{line}")
                 except:
                     pass
 
@@ -5703,7 +5905,8 @@ async def run_user_bot(session_string, chat_id):
                     u = await user_bot.get_entity(uid)
                     name = u.first_name or str(uid)
                     percent = random.randint(0, 100)
-                    await event.reply(f"📊 **Gay Meter**\n{name} is **{percent}%** Gay! 🏳️‍🌈")
+                    line = get_funny_line('gay', percent)
+                    await event.reply(f"📊 **Gay Meter**\n{name} is **{percent}%** Gay!\n\n{line}")
                 except:
                     pass
 
@@ -5717,7 +5920,8 @@ async def run_user_bot(session_string, chat_id):
                     u = await user_bot.get_entity(uid)
                     name = u.first_name or str(uid)
                     percent = random.randint(0, 100)
-                    await event.reply(f"📊 **Lesbian Meter**\n{name} is **{percent}%** Lesbian! 👩‍❤️‍👩")
+                    line = get_funny_line('lesbian', percent)
+                    await event.reply(f"📊 **Lesbian Meter**\n{name} is **{percent}%** Lesbian!\n\n{line}")
                 except:
                     pass
 
@@ -5731,7 +5935,8 @@ async def run_user_bot(session_string, chat_id):
                     u = await user_bot.get_entity(uid)
                     name = u.first_name or str(uid)
                     percent = random.randint(0, 100)
-                    await event.reply(f"📊 **Straight Meter**\n{name} is **{percent}%** Straight! 👫")
+                    line = get_funny_line('straight', percent)
+                    await event.reply(f"📊 **Straight Meter**\n{name} is **{percent}%** Straight!\n\n{line}")
                 except:
                     pass
 
@@ -5745,7 +5950,8 @@ async def run_user_bot(session_string, chat_id):
                     u = await user_bot.get_entity(uid)
                     name = u.first_name or str(uid)
                     percent = random.randint(0, 100)
-                    await event.reply(f"📊 **Bi Meter**\n{name} is **{percent}%** Bi! 💖💜💙")
+                    line = get_funny_line('bi', percent)
+                    await event.reply(f"📊 **Bi Meter**\n{name} is **{percent}%** Bi!\n\n{line}")
                 except:
                     pass
 
@@ -5759,7 +5965,8 @@ async def run_user_bot(session_string, chat_id):
                     u = await user_bot.get_entity(uid)
                     name = u.first_name or str(uid)
                     percent = random.randint(0, 100)
-                    await event.reply(f"📊 **Trans Meter**\n{name} is **{percent}%** Trans! ⚧️")
+                    line = get_funny_line('trans', percent)
+                    await event.reply(f"📊 **Trans Meter**\n{name} is **{percent}%** Trans!\n\n{line}")
                 except:
                     pass
 
@@ -5773,7 +5980,8 @@ async def run_user_bot(session_string, chat_id):
                     u = await user_bot.get_entity(uid)
                     name = u.first_name or str(uid)
                     percent = random.randint(0, 100)
-                    await event.reply(f"📊 **Simp Meter**\n{name} is **{percent}%** Simp! 🥺💀")
+                    line = get_funny_line('simp', percent)
+                    await event.reply(f"📊 **Simp Meter**\n{name} is **{percent}%** Simp!\n\n{line}")
                 except:
                     pass
 
@@ -5787,7 +5995,8 @@ async def run_user_bot(session_string, chat_id):
                     u = await user_bot.get_entity(uid)
                     name = u.first_name or str(uid)
                     percent = random.randint(0, 100)
-                    await event.reply(f"📊 **Chad Meter**\n{name} is **{percent}%** Chad! 🗿🔥")
+                    line = get_funny_line('chad', percent)
+                    await event.reply(f"📊 **Chad Meter**\n{name} is **{percent}%** Chad!\n\n{line}")
                 except:
                     pass
 
@@ -5801,7 +6010,8 @@ async def run_user_bot(session_string, chat_id):
                     u = await user_bot.get_entity(uid)
                     name = u.first_name or str(uid)
                     percent = random.randint(0, 100)
-                    await event.reply(f"📊 **Friendly Meter**\n{name} is **{percent}%** Friendly! 🤗😊")
+                    line = get_funny_line('friendly', percent)
+                    await event.reply(f"📊 **Friendly Meter**\n{name} is **{percent}%** Friendly!\n\n{line}")
                 except:
                     pass
 
@@ -5815,7 +6025,8 @@ async def run_user_bot(session_string, chat_id):
                     u = await user_bot.get_entity(uid)
                     name = u.first_name or str(uid)
                     score = random.randint(1, 100)
-                    await event.reply(f"📊 **Rizz Meter**\n{name} has **{score}** Rizz! 😏🔥")
+                    line = get_funny_line('rizz', score)
+                    await event.reply(f"📊 **Rizz Meter**\n{name} has **{score}** Rizz!\n\n{line}")
                 except:
                     pass
 
@@ -5829,7 +6040,8 @@ async def run_user_bot(session_string, chat_id):
                     u = await user_bot.get_entity(uid)
                     name = u.first_name or str(uid)
                     score = random.randint(1, 200)
-                    await event.reply(f"📊 **IQ Score**\n{name} has an IQ of **{score}** 🧠💡")
+                    line = get_funny_line('iq', score)
+                    await event.reply(f"📊 **IQ Score**\n{name} has an IQ of **{score}**\n\n{line}")
                 except:
                     pass
 
@@ -5843,7 +6055,8 @@ async def run_user_bot(session_string, chat_id):
                     u = await user_bot.get_entity(uid)
                     name = u.first_name or str(uid)
                     percent = random.randint(0, 100)
-                    await event.reply(f"📊 **Stupid Meter**\n{name} is **{percent}%** Stupid! 🤪")
+                    line = get_funny_line('stupid', percent)
+                    await event.reply(f"📊 **Stupid Meter**\n{name} is **{percent}%** Stupid!\n\n{line}")
                 except:
                     pass
 
@@ -5857,7 +6070,8 @@ async def run_user_bot(session_string, chat_id):
                     u = await user_bot.get_entity(uid)
                     name = u.first_name or str(uid)
                     percent = random.randint(0, 100)
-                    await event.reply(f"📊 **Sigma Meter**\n{name} is **{percent}%** Sigma! 🐺🔥")
+                    line = get_funny_line('sigma', percent)
+                    await event.reply(f"📊 **Sigma Meter**\n{name} is **{percent}%** Sigma!\n\n{line}")
                 except:
                     pass
 
@@ -5871,7 +6085,8 @@ async def run_user_bot(session_string, chat_id):
                     u = await user_bot.get_entity(uid)
                     name = u.first_name or str(uid)
                     percent = random.randint(0, 100)
-                    await event.reply(f"📊 **Pookie Meter**\n{name} is **{percent}%** Pookie! 🧸💕")
+                    line = get_funny_line('pookie', percent)
+                    await event.reply(f"📊 **Pookie Meter**\n{name} is **{percent}%** Pookie!\n\n{line}")
                 except:
                     pass
 
@@ -5885,11 +6100,12 @@ async def run_user_bot(session_string, chat_id):
                     u = await user_bot.get_entity(uid)
                     name = u.first_name or str(uid)
                     percent = random.randint(0, 100)
-                    await event.reply(f"📊 **Baddie Meter**\n{name} is **{percent}%** Baddie! 💅✨")
+                    line = get_funny_line('baddie', percent)
+                    await event.reply(f"📊 **Baddie Meter**\n{name} is **{percent}%** Baddie!\n\n{line}")
                 except:
                     pass
 
-        # ─── BEST FRIEND, DIVORCE, MARRIAGE ──────────────────────────────────
+        # ─── BEST FRIEND, MARRIAGE, DIVORCE ──────────────────────────────
 
         @register_cmd("bestfrnd")
         async def cmd_bestfrnd(event, arg):
@@ -5900,10 +6116,18 @@ async def run_user_bot(session_string, chat_id):
             try:
                 u = await user_bot.get_entity(uid)
                 name = u.first_name or str(uid)
-                msg = f"💖 **{name}**, will you be my best friend forever? 🌟\n\n*{random.choice(['You are the sunshine of my life ☀️', 'You make my heart skip a beat 💓', 'My life is incomplete without you 💔'])}*"
+                msgs = [
+                    f"💖 **{name}**, will you be my best friend forever? 🌟\n\nYou are the sunshine of my life ☀️",
+                    f"💖 **{name}**, let's be BFFs! 🥺\n\nYou make my heart skip a beat 💓",
+                    f"💖 **{name}**, I choose you as my bestie! 💕\n\nMy life is incomplete without you 💔",
+                    f"💖 **{name}**, tu meri best friend banegi? 🤗\n\nTere bina toh dil hai veeran 💔",
+                    f"💖 **{name}**, chal bestie ban ja! 🫂\n\nTu hai toh har gam bhoola 🌈",
+                    f"💖 **{name}**, main tera best friend banna chahta/chahti hoon! 😍\n\nTeri hansi mein jaani hai 💕"
+                ]
+                msg = random.choice(msgs)
                 buttons = [
-                    [types.KeyboardButtonCallback("💞 Yes", f"bestfrnd_yes_{uid}")],
-                    [types.KeyboardButtonCallback("💔 No", f"bestfrnd_no_{uid}")]
+                    [types.KeyboardButtonCallback("💞 Yes / हाँ", f"bestfrnd_yes_{uid}")],
+                    [types.KeyboardButtonCallback("💔 No / नहीं", f"bestfrnd_no_{uid}")]
                 ]
                 await safe_edit(event, msg, buttons=buttons)
             except:
@@ -5918,10 +6142,18 @@ async def run_user_bot(session_string, chat_id):
             try:
                 u = await user_bot.get_entity(uid)
                 name = u.first_name or str(uid)
-                msg = f"💍 **{name}**, will you marry me? ❤️💍\n\n*{random.choice(['I can’t imagine my life without you', 'You are my everything', 'Say yes and make me the happiest person'])}*"
+                msgs = [
+                    f"💍 **{name}**, will you marry me? ❤️💍\n\nI can’t imagine my life without you",
+                    f"💍 **{name}**, be mine forever! 🥰\n\nYou are my everything",
+                    f"💍 **{name}**, let's tie the knot! 🎊\n\nSay yes and make me the happiest person",
+                    f"💍 **{name}**, mujhse shaadi karogi? 🥹\n\nTere bina mera koi nahi 💔",
+                    f"💍 **{name}**, main tera/tujhse pyaar karta/karti hoon! 💕\n\nSach mein, forever ❤️",
+                    f"💍 **{name}**, chal do dil ek ho jaayein! 💞\n\nTu hai toh duniya hai meri 🌍"
+                ]
+                msg = random.choice(msgs)
                 buttons = [
-                    [types.KeyboardButtonCallback("💍 Yes", f"marriage_yes_{uid}")],
-                    [types.KeyboardButtonCallback("💔 No", f"marriage_no_{uid}")]
+                    [types.KeyboardButtonCallback("💍 Yes / हाँ", f"marriage_yes_{uid}")],
+                    [types.KeyboardButtonCallback("💔 No / नहीं", f"marriage_no_{uid}")]
                 ]
                 await safe_edit(event, msg, buttons=buttons)
             except:
@@ -5936,18 +6168,22 @@ async def run_user_bot(session_string, chat_id):
             try:
                 u = await user_bot.get_entity(uid)
                 name = u.first_name or str(uid)
-                msg = f"💔 **{name}**, I think we should get divorced... 😢\n\n*{random.choice(['It’s not you, it’s me', 'We grew apart', 'I need some space'])}*"
+                msgs = [
+                    f"💔 **{name}**, I think we should get divorced... 😢\n\nIt’s not you, it’s me",
+                    f"💔 **{name}**, we need to part ways... 😭\n\nWe grew apart",
+                    f"💔 **{name}**, I'm sorry but I need space... 💔\n\nI need some space",
+                    f"💔 **{name}**, mujhe talaaq chahiye... 😭\n\nAb saath nahi reh sakte 💔",
+                    f"💔 **{name}**, rista todna padega... 😢\n\nKuch rishte kabhi nahi chahiye the 🤷",
+                    f"💔 **{name}**, ab nahi ho sakta... 💔\n\nTu theek hai, par main nahi 🥀"
+                ]
+                msg = random.choice(msgs)
                 buttons = [
-                    [types.KeyboardButtonCallback("✅ Yes", f"divorce_yes_{uid}")],
-                    [types.KeyboardButtonCallback("❌ No", f"divorce_no_{uid}")]
+                    [types.KeyboardButtonCallback("✅ Yes / हाँ", f"divorce_yes_{uid}")],
+                    [types.KeyboardButtonCallback("❌ No / नहीं", f"divorce_no_{uid}")]
                 ]
                 await safe_edit(event, msg, buttons=buttons)
             except:
                 await safe_edit(event, "❌ Failed to find user.")
-
-        # ─── CALLBACK HANDLER FOR BESTFRND, MARRIAGE, DIVORCE ──────────────
-        # Note: these need to be added to the main callback_handler function.
-        # We'll update the callback_handler below.
         
         # ─── FUN RAIDS (Menu8) ──────────────────────────────────────────────────
 
