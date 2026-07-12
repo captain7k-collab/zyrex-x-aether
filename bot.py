@@ -38,7 +38,7 @@ PREMIUM_FEATURES_LINK = os.environ.get("PREMIUM_FEATURES_LINK", "https://t.me/us
 
 # ─── CHANNEL VERIFICATION ───
 REQUIRED_CHANNELS = [
-    {"id": -5503082439, "invite": "https://t.me/+SgFpi8dk3cwwODQ9", "name": "Channel 1"},
+    {"id": -1004469717320, "invite": "https://t.me/+SgFpi8dk3cwwODQ9", "name": "Channel 1"},
     {"id": -1003971062167, "invite": "https://t.me/botscripts18", "name": "Channel 2"},
     {"id": -1004452969098, "invite": "https://t.me/userbotsupport_ZA", "name": "Channel 3"},
 ]
