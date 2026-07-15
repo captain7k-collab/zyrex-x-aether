@@ -38,7 +38,7 @@ PREMIUM_FEATURES_LINK = os.environ.get("PREMIUM_FEATURES_LINK", "https://t.me/us
 
 # ─── CHANNEL VERIFICATION ───
 REQUIRED_CHANNELS = [
-   # {"id": -1004469717320, "invite": "https://t.me/+SgFpi8dk3cwwODQ9", "name": "Channel 1"},
+    {"id": -1003896742623, "invite": "https://t.me/+slCWwd6XmSc5OTU9", "name": "Channel 1"},
     {"id": -1003971062167, "invite": "https://t.me/botscripts18", "name": "Channel 2"},
     {"id": -1004452969098, "invite": "https://t.me/userbotsupport_ZA", "name": "Channel 3"},
 ]
@@ -286,7 +286,13 @@ async def is_protected(target_user: int, command: str) -> bool:
     return command in protections
 
 # ─── MAIN BOT ─────────────────────────────────────────────────────
-MAIN_BOT_CLIENT = TelegramClient("main_bot_session", API_ID, API_HASH)
+MAIN_BOT_CLIENT = TelegramClient(
+    "main_bot_session",
+    API_ID,
+    API_HASH,
+    connection_retries=3,
+    auto_reconnect=False
+)
 
 active_userbots = {}
 user_sessions = {}
@@ -1178,6 +1184,7 @@ async def run_user_bot_with_restart(session_string, chat_id):
             await asyncio.sleep(wait)
             restart_count = 0
             session_invalid_notified = False
+
         except (UnauthorizedError, ValueError, RPCError) as e:
             error_msg = str(e)
             if "SESSION_INVALID" in error_msg or "invalid" in error_msg.lower():
@@ -1202,12 +1209,93 @@ async def run_user_bot_with_restart(session_string, chat_id):
                 user_sessions.pop(chat_id, None)
                 await delete_session(chat_id)
                 break  # stop restarting
+
+        # ⬇️⬇️⬇️ यहाँ से नया कोड डालना है (यह सब कॉपी करके डालें) ⬇️⬇️⬇️
+        except AuthKeyDuplicatedError as e:
+            print(f"🔴 AuthKeyDuplicatedError for user {chat_id}. Session revoked. Stopping restarts.")
+            try:
+                await MAIN_BOT_CLIENT.send_message(chat_id,
+                    "⚠️ **Your session was used from two places simultaneously and has been revoked.**\n"
+                    "Please login again using `/login` in the main bot.\n"
+                    "🛑 This userbot will NOT restart automatically.")
+                for owner in MY_OWNER_IDS:
+                    await MAIN_BOT_CLIENT.send_message(owner,
+                        f"🔴 **AuthKeyDuplicatedError**\n👤 User: {chat_id}\n✅ Restart loop stopped.")
+            except:
+                pass
+            # Session को DB से हटाएँ और Userbot को डिस्कनेक्ट करें
+            if chat_id in active_userbots:
+                try:
+                    await active_userbots[chat_id].disconnect()
+                except:
+                    pass
+                del active_userbots[chat_id]
+            user_sessions.pop(chat_id, None)
+            await delete_session(chat_id)
+            break  # ⬅️ Infinite loop को तोड़ने के लिए बहुत ज़रूरी है!
+        # ⬆️⬆️⬆️ नया कोड यहाँ खत्म ⬆️⬆️⬆️
+
         except asyncio.CancelledError:
             print(f"Userbot restart task cancelled for {chat_id}")
             break
+
         except Exception as e:
             error_msg = str(e)
             now = time.time()
+            
+            # ─── SPECIAL CHECK FOR EOF OR INTERACTIVE INPUT ERROR ───
+            if "EOF" in error_msg or "input" in error_msg.lower() or "interactive" in error_msg.lower():
+                print(f"🚫 Session invalid (EOF/interactive) for user {chat_id}. Stopping restarts.")
+                try:
+                    await MAIN_BOT_CLIENT.send_message(
+                        chat_id,
+                        "⚠️ **Your userbot session has expired or become invalid!**\n\n"
+                        "Please login again using `/login` in the main bot.\n"
+                        "🛑 This userbot will now stop automatically restarting.")
+                    for owner in MY_OWNER_IDS:
+                        await MAIN_BOT_CLIENT.send_message(
+                            owner,
+                            f"🚫 **Userbot Session Invalid (EOF/Interactive)**\n"
+                            f"👤 User: {chat_id}\n"
+                            f"📌 Reason: {error_msg[:100]}\n"
+                            f"✅ Restart loop stopped for this user.")
+                except:
+                    pass
+                try:
+                    if chat_id in active_userbots:
+                        await active_userbots[chat_id].disconnect()
+                        del active_userbots[chat_id]
+                except:
+                    pass
+                user_sessions.pop(chat_id, None)
+                await delete_session(chat_id)
+                break
+            
+            # ─── NORMAL RESTART LOGIC (बाकी Errors के लिए) ───
+            if restart_count >= 5 and (now - last_restart_time) < 60:
+                print(f"⚠️ Too many restarts for user {chat_id} in short time. Waiting...")
+                try:
+                    await MAIN_BOT_CLIENT.send_message(chat_id, f"⚠️ **Userbot is having issues.**\n⏳ Waiting 60 seconds before retry...")
+                except:
+                    pass
+                await asyncio.sleep(60)
+                restart_count = 0
+            restart_count += 1
+            last_restart_time = now
+            print(f"⚠️ Userbot crashed: {error_msg[:100]}\nRestarting in 5 seconds... (Attempt {restart_count})")
+            if restart_count % 3 == 1:
+                try:
+                    await MAIN_BOT_CLIENT.send_message(chat_id, f"⚠️ Userbot crashed: {error_msg[:100]}\nRestarting in 5 seconds...")
+                except:
+                    pass
+            if restart_count % 5 == 0:
+                try:
+                    for owner in MY_OWNER_IDS:
+                        await MAIN_BOT_CLIENT.send_message(owner, 
+                            f"🔄 **Userbot Restart**\n👤 User: {chat_id}\n📌 Reason: {error_msg[:80]}\n🔢 Attempt: {restart_count}")
+                except:
+                    pass
+            await asyncio.sleep(5)
             
             # ─── SPECIAL CHECK FOR EOF OR INTERACTIVE INPUT ERROR ───
             if "EOF" in error_msg or "input" in error_msg.lower() or "interactive" in error_msg.lower():
@@ -1272,7 +1360,13 @@ async def run_user_bot_with_restart(session_string, chat_id):
 async def run_user_bot(session_string, chat_id):
     user_bot = None
     try:
-        user_bot = TelegramClient(StringSession(session_string), API_ID, API_HASH, auto_reconnect=True)
+        user_bot = TelegramClient(
+            StringSession(session_string),
+            API_ID,
+            API_HASH,
+            auto_reconnect=False,
+            connection_retries=2
+        )
         await user_bot.start()
         active_userbots[chat_id] = user_bot
 
