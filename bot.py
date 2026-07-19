@@ -7396,7 +7396,6 @@ async def run_user_bot(session_string, chat_id):
                 await safe_edit(event, "❌ Invalid action. Use `set` or `stop`.")
 
         # ─── DEATHGOD ────────────────────────────────────────────────────────────
-
         @register_cmd("deathgod")
         async def cmd_deathgod(event, arg):
             chat = event.chat_id
@@ -7430,7 +7429,7 @@ async def run_user_bot(session_string, chat_id):
                     while chat in user_bot.spray_tasks:
                         if count is not None and sent >= count:
                             break
-                        # Optional: re-check every 10 messages (if premium added later)
+                        # Re-check protection every 10 messages
                         if target_user and sent % 10 == 0 and await is_protected(target_user, "deathgod"):
                             await safe_send(chat, "🛑 Target is now protected. Stopping Deathgod.")
                             break
@@ -7449,6 +7448,19 @@ async def run_user_bot(session_string, chat_id):
 
             user_bot.spray_tasks[chat] = asyncio.create_task(loop())
             await safe_edit(event, f"☠️ Deathgod started{' with reply' if reply_to else ''}{' (' + str(count) + ' msgs)' if count else ' (infinite)'}")
+
+        @register_cmd("sdeathgod")
+        async def cmd_sdeathgod(event, _):
+            chat = event.chat_id
+            if chat in user_bot.spray_tasks:
+                try:
+                    user_bot.spray_tasks[chat].cancel()
+                except:
+                    pass
+                user_bot.spray_tasks.pop(chat, None)
+                await safe_edit(event, "🛑 Deathgod stopped.")
+            else:
+                await safe_edit(event, "⚠️ No active Deathgod spray in this chat.")
 
 
         # ─── DISPATCHER ──────────────────────────────────────────────────────
